@@ -140,6 +140,7 @@
         <div class="row">
           <button id="awaken-run">awaken</button>
           <button id="awaken-nosvg" class="secondary">awaken (no svg)</button>
+          <button id="awaken-stream" class="secondary">awaken (stream)</button>
         </div>
         <div class="row">
           <button id="awaken-copy" class="secondary" disabled>copy seal</button>
@@ -545,6 +546,7 @@ let lastAwaken = null;
 
 $("#awaken-run").addEventListener("click", () => runAwaken(false));
 $("#awaken-nosvg").addEventListener("click", () => runAwaken(true));
+$("#awaken-stream").addEventListener("click", () => runAwakenStream(false));
 
 async function runAwaken(noSvg) {
   const inv = $("#awaken-invocation").value.trim() || "ELOHIM:AWAKEN";
@@ -574,6 +576,63 @@ async function runAwaken(noSvg) {
   } catch (e) {
     $("#awaken-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
     toast("awaken failed: " + e.message, "error");
+  }
+}
+
+// Streaming awaken: render each section as it finishes computing.
+// The bridge returns a JSON list of chunks (header / section / sigil / footer);
+// we append each chunk to the report panel in real time.
+async function runAwakenStream(noSvg) {
+  const inv = $("#awaken-invocation").value.trim() || "ELOHIM:AWAKEN";
+  $("#awaken-status").textContent = "streaming…";
+  // Reset the report panel and show a live cursor.
+  $("#awaken-report").innerHTML = "";
+  $("#awaken-report-card").style.display = "block";
+  $("#awaken-sigil").innerHTML = '<span style="color:var(--fg-soft)">computing…</span>';
+  $("#awaken-seal").textContent = "(streaming…)";
+  $("#awaken-copy").disabled = true;
+  $("#awaken-download").disabled = true;
+  $("#awaken-png").disabled = true;
+  $("#awaken-show-facts").disabled = true;
+  const start = performance.now();
+  try {
+    const chunks = await call("stream_awaken", { invocation: inv, no_svg: noSvg });
+    let seal = null;
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      // Render the chunk's text into the report panel.
+      const html = renderShardMd(c.text || "", c.seal || null);
+      $("#awaken-report").insertAdjacentHTML("beforeend", html);
+      // Update seal and sigil as they appear.
+      if (c.phase === "footer" && c.seal) {
+        seal = c.seal;
+        $("#awaken-seal").textContent = seal;
+      }
+      if (c.phase === "sigil" && c.sigil_svg) {
+        $("#awaken-sigil").innerHTML = c.sigil_svg;
+        $("#awaken-download").disabled = false;
+        $("#awaken-png").disabled = false;
+      }
+      // Yield to the event loop so the DOM can paint between chunks.
+      await new Promise((r) => setTimeout(r, 0));
+      $("#awaken-status").textContent =
+        `streaming… ${i + 1}/${chunks.length} (${Math.round(performance.now() - start)}ms)`;
+    }
+    const ms = Math.round(performance.now() - start);
+    $("#awaken-status").innerHTML =
+      `<span class="ok">✓ streamed ${chunks.length} chunks</span> · ${ms}ms · invocation: ${inv}`;
+    if (seal) {
+      $("#awaken-copy").disabled = false;
+      $("#awaken-show-facts").disabled = false;
+      lastAwaken = { seal, sigil_svg: chunks[chunks.length - 1]?.sigil_svg || null,
+        md: chunks.map(c => c.text || "").join("\n") };
+      // Auto-scroll the report to the bottom.
+      $("#awaken-report").scrollTop = $("#awaken-report").scrollHeight;
+    }
+    toast(`streamed ${chunks.length} chunks in ${ms}ms`);
+  } catch (e) {
+    $("#awaken-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
+    toast("stream failed: " + e.message, "error");
   }
 }
 

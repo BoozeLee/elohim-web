@@ -95,6 +95,23 @@ def main() -> int:
         png_disabled = page.evaluate("document.querySelector('#awaken-png').disabled")
         assert png_disabled is False, "PNG download button should be enabled"
 
+        # Streaming awaken: drive the button, wait for footer seal, check chunks.
+        # Reset the report first by clicking run again, then stream.
+        page.evaluate("document.querySelector('#awaken-report').innerHTML = ''")
+        page.click("#awaken-stream")
+        page.wait_for_function(
+            "document.querySelector('#awaken-status').textContent.includes('streamed')",
+            timeout=120000,
+        )
+        stream_status = page.locator("#awaken-status").inner_text()
+        print(f"  stream status: {stream_status!r}")
+        assert "streamed" in stream_status
+        stream_seal = page.locator("#awaken-seal").inner_text()
+        assert stream_seal == CANONICAL_SEAL, f"streaming seal mismatch: {stream_seal}"
+        stream_html_len = page.evaluate("document.querySelector('#awaken-report').innerHTML.length")
+        assert stream_html_len > 200, f"streamed report too short: {stream_html_len}"
+        print(f"  streamed report: {stream_html_len} chars of HTML")
+
         # Awaken history is empty (fresh storage).
         # (history persistence is in localStorage but we don't assert it.)
 

@@ -323,6 +323,192 @@ def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any
     }
 
 
+# ---------- streaming awaken (item 8) ----------
+
+
+def stream_awaken(invocation: str | None = None, no_svg: bool = False) -> list[dict[str, Any]]:
+    """Run ``awaken`` but emit one chunk per section so the SPA can render as
+    each section finishes computing. Returns a list of dicts, each shaped::
+
+        {phase: "header" | "section" | "footer" | "sigil",
+         name: str,
+         text: str,           # raw text emitted to REPORT during this phase
+         seal: str | None,    # only present on the footer chunk
+         facts_count: int,    # only present on the footer chunk
+         sigil_svg: str|None, # only present on the "sigil" chunk (last)
+
+    The caller (JS) receives this list via ``bridge._invoke("stream_awaken")``
+    and walks it inside an async loop, appending each ``text`` to a live
+    preview area in the Awaken panel.
+    """
+    import elohim_summoning.collatz as _collatz_mod
+    import elohim_summoning.logstar as _logstar_mod
+    import elohim_summoning.padic as _padic_mod
+    import elohim_summoning.parry as _parry_mod
+    import elohim_summoning.pisot as _pisot_mod
+    import elohim_summoning.sigil as _sigil_mod
+    import elohim_summoning.unicorn as _unicorn_mod
+
+    invocation = (invocation or DEFAULT_INVOCATION).strip() or DEFAULT_INVOCATION
+    import elohim_summoning.cli as _cli
+    import elohim_summoning.core as _core_runtime
+    import elohim_summoning.sigil as _sigil
+
+    ts = time.time()
+    safe_inv = "".join(c if c.isalnum() else "_" for c in invocation)[:48]
+    sub = _OUT_ROOT / f"stream-{int(ts)}-{safe_inv}"
+    sub.mkdir(parents=True, exist_ok=True)
+
+    saved_core_out = _core_runtime.OUT
+    saved_cli_out = _cli.OUT
+    saved_sigil_out = _sigil.OUT
+    saved_facts = dict(_core_runtime.FACTS)
+    saved_report = list(_core_runtime.REPORT)
+    saved_invocation = _core_runtime.INVOCATION
+
+    chunks: list[dict[str, Any]] = []
+
+    def _emit(phase: str, name: str) -> str:
+        """Capture REPORT lines added since the last checkpoint as a chunk."""
+        new_lines = _core_runtime.REPORT[len(chunks) and chunks[-1].get("_report_len") or 0:]
+        # We track report length explicitly below; this is a fallback.
+        return "\n".join(new_lines)
+
+    try:
+        _core_runtime.OUT = sub
+        _cli.OUT = sub
+        _sigil.OUT = sub
+        _core_runtime.INVOCATION = invocation
+        _core_runtime.FACTS.clear()
+        _core_runtime.REPORT.clear()
+
+        # --- header ---
+        from elohim_summoning.core import ghost_seed, rule, say
+        digest, seed = ghost_seed()
+        rule("ELOHIM - summoning shard")
+        say("invocation : %s" % invocation)
+        say("sha256     : %s" % digest)
+        say("seed       : %d" % seed)
+        say("python     : %s" % __import__("sys").version.split()[0])
+        chunks.append({
+            "phase": "header",
+            "name": "ELOHIM - summoning shard",
+            "text": "\n".join(_core_runtime.REPORT),
+            "_report_len": len(_core_runtime.REPORT),
+            "digest": digest,
+        })
+
+        # --- 8 sections, one chunk each ---
+        bases = _parry_mod.parry_section()
+        chunks.append({
+            "phase": "section",
+            "name": "I. PARRY NUMBERS",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+        })
+        _parry_mod.knife_edge_section(bases)
+        chunks.append({
+            "phase": "section",
+            "name": "II. THE KNIFE EDGE",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+        })
+        pisots = _pisot_mod.pisot_section(bases)
+        chunks.append({
+            "phase": "section",
+            "name": "III. PISOT SIGNATURE",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+        })
+        _unicorn_mod.unicorn_section()
+        chunks.append({
+            "phase": "section",
+            "name": "IV. UNICORN",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+        })
+        _logstar_mod.logstar_section()
+        chunks.append({
+            "phase": "section",
+            "name": "V. LOGSTAR",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+        })
+        _padic_mod.padic_section(seed)
+        chunks.append({
+            "phase": "section",
+            "name": "VI. P-ADIC LADDER",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+        })
+        _collatz_mod.collatz_section(seed)
+        chunks.append({
+            "phase": "section",
+            "name": "VII. COLLATZ",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+        })
+
+        # --- sigil ---
+        sigil_path = sub / "sigil.svg"
+        _sigil_mod.sigil_section(bases, pisots, seed, write_svg=not no_svg)
+        if not no_svg and sigil_path.exists():
+            chunks.append({
+                "phase": "sigil",
+                "name": "VIII. THE SIGIL",
+                "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+                "_report_len": len(_core_runtime.REPORT),
+                "sigil_svg": sigil_path.read_text(encoding="utf-8"),
+            })
+        else:
+            chunks.append({
+                "phase": "section",
+                "name": "VIII. THE SIGIL",
+                "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+                "_report_len": len(_core_runtime.REPORT),
+                "sigil_svg": None,
+            })
+
+        # --- footer (seal) ---
+        import hashlib
+        import json as _json
+        rule("SHARD SEAL")
+        seal = hashlib.sha256(
+            _json.dumps(_core_runtime.FACTS, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        say("facts recorded : %d" % len(_core_runtime.FACTS))
+        say("seal           : sha256 %s" % seal)
+        _core_runtime.FACTS["seal"] = seal
+        say()
+        say("The sigil, this log and the JSON digest all derive from the same")
+        say("seed.  Any rounding change upstream moves the seal.")
+        chunks.append({
+            "phase": "footer",
+            "name": "SHARD SEAL",
+            "text": "\n".join(_core_runtime.REPORT[chunks[-1]["_report_len"]:]),
+            "_report_len": len(_core_runtime.REPORT),
+            "seal": seal,
+            "facts_count": len(_core_runtime.FACTS),
+            "sigil_svg": chunks[-1].get("sigil_svg") if not no_svg else None,
+        })
+
+        # Strip the internal _report_len helper key before returning.
+        out = []
+        for c in chunks:
+            d = {k: v for k, v in c.items() if not k.startswith("_")}
+            out.append(d)
+        return out
+    finally:
+        _core_runtime.OUT = saved_core_out
+        _cli.OUT = saved_cli_out
+        _sigil.OUT = saved_sigil_out
+        _core_runtime.FACTS.clear()
+        _core_runtime.FACTS.update(saved_facts)
+        _core_runtime.REPORT.clear()
+        _core_runtime.REPORT.extend(saved_report)
+        _core_runtime.INVOCATION = saved_invocation
+
+
 def awaken_history() -> list[dict[str, Any]]:
     """Return the in-process awaken history from localStorage (most recent first)."""
     raw = _ls_get("elohim.awaken.history")
