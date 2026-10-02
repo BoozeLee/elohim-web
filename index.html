@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>elohim · the ghost in the machine</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%23fff5d8'/><stop offset='1' stop-color='%23e8b860'/></linearGradient></defs><rect width='32' height='32' fill='%23080910' rx='6'/><path fill='url(%23g)' d='M16,5 C9,5 5,10 5,16 C5,22 8,25 8,29 L8,30 L11,30 L11,27 L13,27 L13,30 L19,30 L19,27 L21,27 L21,30 L24,30 L24,29 C24,25 27,22 27,16 C27,10 23,5 16,5 Z'/><circle cx='13' cy='15' r='1.5' fill='%23080910'/><circle cx='19' cy='15' r='1.5' fill='%23080910'/></svg>">
 <style>
   /* ─── Ghost in the Machine palette ────────────────────────────────────
      Gilbert Ryle's 1949 phrase for the Cartesian dogma that a body
@@ -111,12 +112,22 @@
     display: flex;
     z-index: 2;
   }
-  .palette-strip span { flex: 1; transition: background 0.6s ease; }
+  .palette-strip span { flex: 1; transition: background 0.6s ease, box-shadow 0.6s ease, transform 0.6s ease; }
   .strip-c1 { background: var(--ghost-accent, var(--accent)); }
   .strip-c2 { background: var(--ghost-secondary, var(--teal)); }
   .strip-c3 { background: var(--ghost-tertiary, var(--accent)); }
   .strip-c4 { background: var(--ghost-edge, var(--accent)); }
   .strip-c5 { background: var(--ghost-ground, var(--accent)); box-shadow: 0 0 16px var(--ghost-accent-glow, var(--accent-glow)); }
+  /* Pulse the segment that maps to the currently active tab.
+     5 segments ↔ 5 tabs (awaken=1, create=2, arena=3, codex=4, webmcp=5). */
+  .palette-strip span.active {
+    animation: strip-pulse 1.6s ease-in-out infinite;
+    box-shadow: 0 0 18px var(--ghost-accent-glow, var(--accent-glow));
+  }
+  @keyframes strip-pulse {
+    0%, 100% { transform: scaleY(1);    filter: brightness(1.0); }
+    50%      { transform: scaleY(1.6);  filter: brightness(1.6); }
+  }
   /* ─── Hero — the ghost in the machine, central focal point ──────── */
   .hero {
     position: relative;
@@ -785,6 +796,30 @@
 </style>
 </head>
 <body>
+
+<!-- Noscript fallback — readers without JS get the Ryle quote and a
+     pointer to the source code on GitHub. No interactivity, no
+     Pyodide, just the lore. -->
+<noscript>
+  <div style="
+    max-width: 640px; margin: 40px auto; padding: 28px 32px;
+    background: #161b24; color: #e8d9b8; font-family: ui-monospace, monospace;
+    border: 1px solid #232a36; border-radius: 6px; line-height: 1.65;
+  ">
+    <h1 style="margin:0 0 12px 0; color:#e8b860;">elohim · the ghost in the machine</h1>
+    <p style="font-style:italic; color:#fff5d8;">
+      "Such in outline is the official doctrine, the dogma of the
+      Ghost in the Machine." — Gilbert Ryle, <i>The Concept of Mind</i> (1949)
+    </p>
+    <p style="color:#8392a8;">
+      This site is a browser-resident Python daemon. JavaScript is
+      required to summon the ghost. The full source code lives at
+      <a style="color:#4fd6c8;" href="https://github.com/BoozeLee/elohim">
+        github.com/BoozeLee/elohim</a>; read the README for the lore,
+      the seal contract, and the Xenomath framework.
+    </p>
+  </div>
+</noscript>
 
 <!-- Atmospheric particle drift — slowly rising sparks that fill the
      page like dust motes in a sealed machine. Pure CSS animation; no
@@ -2183,6 +2218,18 @@ $("#tab-arena").addEventListener("click", async () => {
   }
 });
 
+// Update the palette-strip active segment to match the current tab.
+// 5 strip segments ↔ 5 tabs.
+function updatePaletteStripActive() {
+  const tabs = ["awaken", "create", "arena", "codex", "webmcp"];
+  const idx = tabs.findIndex((t) => $(`#tab-${t}`)?.classList.contains("active"));
+  const strip = $(".palette-strip");
+  if (!strip) return;
+  strip.querySelectorAll("span").forEach((s, i) => {
+    s.classList.toggle("active", i === idx);
+  });
+}
+
 // Codex tab — runs alien_codex() which uses stdlib only (no numpy needed
 // for the math itself, but we still ensure numpy for consistency with
 // the other post-boot tabs).
@@ -2756,6 +2803,14 @@ window.addEventListener("DOMContentLoaded", () => {
     const target = $(`#tab-${tabs[next]}`);
     if (target && !target.disabled) target.click();
   });
+  // Hook the palette-strip pulse to any tab activation: every click
+  // handler eventually calls classList.add('active'), so a single
+  // click-delegation listener on .tabs keeps the strip in sync.
+  $$(".tabs")[0]?.addEventListener("click", () => {
+    setTimeout(updatePaletteStripActive, 0);
+  });
+  // Initial state — awaken is the default active tab.
+  updatePaletteStripActive();
   // Build stamp — proves which deploy the user is looking at.
   // The page Last-Modified header is read via fetch + HEAD fallback to
   // the document's own meta tags so the stamp survives GitHub Pages
