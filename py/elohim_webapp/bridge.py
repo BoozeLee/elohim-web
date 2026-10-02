@@ -283,7 +283,8 @@ def verify_seal_multi() -> dict[str, Any]:
                 "agent_name": (soul_payload.get("agent_name") if isinstance(soul_payload, dict) else None),
                 "schema": (soul_payload.get("schema") if isinstance(soul_payload, dict) else None),
                 "rationale": "elohim.soul.last must round-trip through soul_verify "
-                             "(tamper-check when exported without one; HMAC if exported with a passphrase).",
+                             "(Ed25519 if exported with a v0.2 keypair; HMAC if exported with a passphrase; "
+                             "tamper-check otherwise).",
                 "verification": soul_check,
             })
         except Exception as e:
@@ -308,8 +309,10 @@ def verify_seal_multi() -> dict[str, Any]:
 # agent on any framework can load to recover its previous evocations,
 # sealed-message history, and Xenomath provenance. See docs/show-hn-draft.md.
 SOUL_SCHEMA_V1 = "elohim-soul/v1"
+SOUL_SCHEMA_V2 = "elohim-soul/v2"  # Push 15 — Ed25519 signing
 SOUL_KDF_SHA256 = "sha256"
 SOUL_ALG_HMAC = "sha256-hmac"
+SOUL_ALG_ED25519 = "ed25519"        # Push 15 — nacl.signing
 _SOUL_KEY = "elohim.soul.last"
 _SOUL_EVOCATIONS_KEY = "elohim.soul.evocations"
 _SOUL_MESSAGES_KEY = "elohim.soul.messages"
@@ -327,7 +330,7 @@ def _soul_body_json(envelope: dict[str, Any]) -> str:
 
 
 def _soul_signature(body: str, passphrase: str | None) -> dict[str, Any]:
-    """Compute the Soul File signature block.
+    """Compute the v0.1 Soul File signature block.
 
     v0.1: ``sha256-hmac`` if a passphrase is supplied; ``sha256(body)`` tamper
     hash otherwise. The schema reserves ``signature.alg`` so v0.2 can swap in
@@ -353,23 +356,186 @@ def _soul_signature(body: str, passphrase: str | None) -> dict[str, Any]:
     }
 
 
+# ---------- v0.2 Ed25519 (Push 15) ----------
+#
+# Strategy: prefer ``nacl.signing`` when available; otherwise fall back to
+# the vendored pure-Python ``_pure25519`` module. The Pyodide 0.27.x
+# runtime ships no pynacl wheel; the vendored fallback makes the Soul File
+# v0.2 surface work in any browser. Both paths produce the same Ed25519
+# signature bytes (verified against RFC 8032 §7.1 test vector 1).
+#
+# Stdlib-only contract preserved: ``elohim_summoning`` does not import
+# nacl or _pure25519. The nacl dep belongs in elohim-web's optional
+# [soul] extra; the vendored fallback uses only ``hashlib``.
+
+def _ed25519_sign_impl():
+    """Return (sign_fn, publickey_fn) — nacl if available, else pure25519.
+
+    The returned functions match the nacl.signing API:
+        sk_bytes, msg_bytes -> sig_bytes   (64)
+        sk_bytes -> pk_bytes               (32)
+    """
+    try:
+        import nacl.signing  # type: ignore[import-not-found]
+        # n=s nacl surface.
+        def _nacl_sign(seed: bytes, msg: bytes) -> bytes:
+            return bytes(nacl.signing.SigningKey(seed).sign(msg).signature)
+        def _nacl_pk(seed: bytes) -> bytes:
+            return bytes(nacl.signing.SigningKey(seed).verify_key)
+        return _nacl_sign, _nacl_pk
+    except Exception:
+        # Pyodide / minimal env: use the vendored pure-Python fallback.
+        try:
+            from . import _pure25519 as _p  # type: ignore[import-not-found]
+        except (ImportError, ValueError):
+            # When loaded via importlib _stub, ``from . import _pure25519``
+            # fails because there's no package context. Fall back to a
+            # direct path-based import.
+            import importlib.util as _ilu
+            import os as _os
+            here = _os.path.dirname(_os.path.abspath(__file__))
+            spec = _ilu.spec_from_file_location(
+                "_pure25519_inline", os.path.join(here, "_pure25519.py")
+            )
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _p = mod
+        return _p.sign, _p.publickey
+
+
+def _ed25519_verify_impl():
+    """Return the verify function — nacl if available, else pure25519."""
+    try:
+        import nacl.signing  # type: ignore[import-not-found]
+        def _nacl_verify(pk: bytes, msg: bytes, sig: bytes) -> bool:
+            try:
+                nacl.signing.VerifyKey(pk).verify(msg, sig)
+                return True
+            except Exception:
+                return False
+        return _nacl_verify
+    except Exception:
+        try:
+            from . import _pure25519 as _p
+        except (ImportError, ValueError):
+            import importlib.util as _ilu
+            import os as _os
+            here = _os.path.dirname(_os.path.abspath(__file__))
+            spec = _ilu.spec_from_file_location(
+                "_pure25519_inline", os.path.join(here, "_pure25519.py")
+            )
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _p = mod
+        return _p.verify
+
+
+def _b64encode(b: bytes) -> str:
+    import base64 as _b64
+    return _b64.b64encode(b).decode("ascii")
+
+
+def _b64decode(s: str) -> bytes:
+    import base64 as _b64
+    return _b64.b64decode(s.encode("ascii"))
+
+
+def soul_keygen() -> dict[str, Any]:
+    """Generate a fresh Ed25519 keypair for Soul File v0.2.
+
+    Returns ``{ok, pk, sk, alg}``. The sk is the *private* key — it must
+    never be echoed by any other bridge function, never logged, and never
+    stored server-side. Pyodide runs client-side so the operator's browser
+    is the only place the sk lives until they export the soul file.
+    """
+    try:
+        _sign, _pk = _ed25519_sign_impl()
+        # nacl SigningKey is 32 bytes; the vendored module exposes a
+        # create_signing_key() helper.
+        try:
+            from . import _pure25519 as _p
+            seed = _p.create_signing_key()
+        except Exception:
+            import os as _os
+            seed = _os.urandom(32)
+        return {
+            "ok": True,
+            "pk": _b64encode(_pk(seed)),
+            "sk": _b64encode(seed),
+            "alg": SOUL_ALG_ED25519,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"Ed25519 keygen failed: {e}",
+            "alg": SOUL_ALG_ED25519,
+        }
+
+
+def _soul_sign_v2(body: str, signing_key_b64: str) -> dict[str, Any]:
+    """Compute the v0.2 Ed25519 signature block.
+
+    Uses nacl.signing if available, otherwise the vendored pure25519
+    fallback. The block carries ``{alg, pk, sig}``; the co-exist decision
+    is implemented in ``soul_export`` (a v1_mac is added alongside the
+    Ed25519 sig so v0.1 readers can still verify the body).
+    """
+    try:
+        _sign, _pk = _ed25519_sign_impl()
+        sk = _b64decode(signing_key_b64)
+        sig = _sign(sk, body.encode("utf-8"))
+        return {
+            "alg": SOUL_ALG_ED25519,
+            "kdf": None,
+            "mac": None,
+            "pk": _b64encode(_pk(sk)),
+            "sig": _b64encode(sig),
+        }
+    except Exception as e:
+        return {"alg": SOUL_ALG_ED25519, "error": f"Ed25519 sign failed: {e}"}
+
+
+def _soul_verify_v2(body: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Verify a v0.2 Ed25519 signature. Returns {ok, signature_ok, error}."""
+    sig_block = payload.get("signature") or {}
+    pk_b64 = sig_block.get("pk")
+    sig_b64 = sig_block.get("sig")
+    if not pk_b64 or not sig_b64:
+        return {"ok": False, "signature_ok": False,
+                "error": "v0.2 envelope missing pk or sig"}
+    try:
+        _verify = _ed25519_verify_impl()
+        ok = bool(_verify(_b64decode(pk_b64),
+                          body.encode("utf-8"),
+                          _b64decode(sig_b64)))
+        return {"ok": ok, "signature_ok": ok}
+    except Exception as e:
+        return {"ok": False, "signature_ok": False,
+                "error": f"Ed25519 verify failed: {e}"}
+
+
 def soul_export(
     agent_name: str | None = None,
     passphrase: str | None = None,
     evocations: list[dict[str, Any]] | None = None,
     sealed_messages: list[dict[str, Any]] | None = None,
     codex_provenance: dict[str, Any] | None = None,
+    signing_key_b64: str | None = None,
 ) -> dict[str, Any]:
     """Compose and sign a Soul File envelope.
 
-    All inputs are optional; when omitted, the latest mirror from
-    localStorage is read (``elohim.soul.evocations``, ``.messages``) and the
-    most recent Xenomath codex seal/palette are taken from
-    ``elohim.soul.last`` if present. The envelope is signed with
-    ``passphrase`` (HMAC-SHA256) or, when absent, with a plain SHA256 tamper
-    hash. Returns ``{ok, envelope, body, signature}`` so the JS layer can
-    either hand the envelope straight to the user as JSON or render the
-    signature block separately.
+    When ``signing_key_b64`` is supplied, the envelope is signed with Ed25519
+    and the schema is ``elohim-soul/v2``. Otherwise the envelope is signed
+    with the v0.1 sha256-hmac scheme and the schema is ``elohim-soul/v1``
+    (legacy by default, for backward-compat with Push 14 callers).
+
+    All other inputs are optional; when omitted, the latest mirror from
+    localStorage is read and the most recent Xenomath codex seal/palette
+    are taken from ``elohim.soul.last`` if present.
+
+    Returns ``{ok, envelope, body, signature, schema_v1, schema_v2}`` so the
+    JS layer can render the right affordance (sk download button only on
+    v0.2, etc.).
     """
     try:
         evs_in = evocations
@@ -389,8 +555,9 @@ def soul_export(
                     codex_in = last_env.get("xenomath_provenance") or {}
                 except Exception:
                     codex_in = {}
+        is_v2 = bool(signing_key_b64)
         envelope: dict[str, Any] = {
-            "schema": SOUL_SCHEMA_V1,
+            "schema": SOUL_SCHEMA_V2 if is_v2 else SOUL_SCHEMA_V1,
             "agent_name": (agent_name or "").strip() or "operator",
             "created_ts": time.time(),
             "last_export_ts": time.time(),
@@ -400,9 +567,23 @@ def soul_export(
             "passphrase_hint": None,
         }
         body = _soul_body_json(envelope)
-        signature = _soul_signature(body, passphrase)
+        if is_v2:
+            signature = _soul_sign_v2(body, signing_key_b64)  # type: ignore[arg-type]
+            # Jev's co-exist decision: also carry a v0.1 tamper-check hash
+            # so any v0.1 reader can still verify the body.
+            v1_mac = _soul_signature(body, passphrase)
+            signature["v1_mac"] = v1_mac.get("mac")
+        else:
+            signature = _soul_signature(body, passphrase)
         envelope["signature"] = signature
-        return {"ok": True, "envelope": envelope, "body": body, "signature": signature}
+        return {
+            "ok": True,
+            "envelope": envelope,
+            "body": body,
+            "signature": signature,
+            "schema_v1": not is_v2,
+            "schema_v2": is_v2,
+        }
     except Exception as e:
         return {"ok": False, "error": f"soul_export failed: {e}"}
 
@@ -430,7 +611,7 @@ def soul_verify(payload: Any, passphrase: str | None = None) -> dict[str, Any]:
         out["error"] = "payload is not a dict"
         return out
     schema = payload.get("schema")
-    schema_ok = schema == SOUL_SCHEMA_V1
+    schema_ok = schema in (SOUL_SCHEMA_V1, SOUL_SCHEMA_V2)
     out["schema_ok"] = schema_ok
     out["checks"].append({"name": "schema", "ok": schema_ok, "got": schema})
     sig = payload.get("signature") or {}
@@ -439,7 +620,25 @@ def soul_verify(payload: Any, passphrase: str | None = None) -> dict[str, Any]:
     stored_mac = (sig.get("mac") or "").lower()
     no_passphrase = bool(sig.get("no_passphrase")) or passphrase is None
 
-    if stored_mac and passphrase:
+    # Push 15: dispatch on signature.alg. v0.2 (Ed25519) wins first; v0.1
+    # (sha256-hmac / tamper-check) is the fallback. The co-exist decision
+    # means a v0.2 envelope also carries a v1_mac so we can verify it both
+    # ways in the same call.
+    if sig.get("alg") == SOUL_ALG_ED25519 and sig.get("pk") and sig.get("sig"):
+        v2 = _soul_verify_v2(body, payload)
+        out["signature_ok"] = v2["signature_ok"]
+        out["checks"].append({"name": "ed25519", "ok": v2["signature_ok"],
+                              "error": v2.get("error")})
+        # Try the co-exist v1_mac as a secondary check.
+        if sig.get("v1_mac"):
+            try:
+                v1_mac_ok = _hl.sha256(body.encode("utf-8")).hexdigest() == sig["v1_mac"]
+                out["tamper_check_ok"] = v1_mac_ok
+                out["checks"].append({"name": "v1_mac_fallback", "ok": v1_mac_ok})
+            except Exception:
+                pass
+
+    elif stored_mac and passphrase:
         import hmac as _hmac
 
         expected = _soul_signature(body, passphrase)["mac"]
@@ -448,7 +647,7 @@ def soul_verify(payload: Any, passphrase: str | None = None) -> dict[str, Any]:
         out["checks"].append(
             {"name": "hmac", "ok": sig_ok, "alg": sig.get("alg")}
         )
-    elif stored_mac and sig.get("no_passphrase"):
+    elif stored_mac and (sig.get("no_passphrase") or no_passphrase):
         tamper_ok = stored_mac == body_hash
         out["tamper_check_ok"] = tamper_ok
         out["signature_ok"] = tamper_ok  # tamper-check = signature when no passphrase
