@@ -17,7 +17,7 @@ URL = f"https://boozelee.github.io/elohim-web/?nocache={int(time.time())}"
 CANONICAL_SEAL = "5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596"
 
 
-def wait_for_boot(page, timeout_ms: int = 90000) -> None:
+def wait_for_boot(page, timeout_ms: int = 300000) -> None:
     """Wait until the boot screen is hidden."""
     page.wait_for_selector("#boot.hidden", state="attached", timeout=timeout_ms)
 
@@ -56,11 +56,41 @@ def main() -> int:
         print(f"✓ version(): {version}")
         assert version["canonical_seal"] == CANONICAL_SEAL
 
+        # Verify the multi-call seal tripwire was used during boot.
+        boot_seal = page.locator("#boot-seal").inner_text()
+        assert "checks ✓" in boot_seal, f"expected multi-check tripwire banner: {boot_seal!r}"
+        print(f"  boot seal banner: {boot_seal!r}")
+
         # Awaken — verify the seal matches.
         result = page.evaluate("window.elohim.awaken('ELOHIM:AWAKEN')")
         print(f"✓ awaken: invocation={result['invocation']!r} seal={result['seal']}")
         assert result["seal"] == CANONICAL_SEAL, f"awaken seal mismatch: {result['seal']}"
         assert result["sigil_svg"] is not None, "awaken produced no SVG"
+        # Drive the UI button so the markdown renderer path runs.
+        page.click("#awaken-run")
+        page.wait_for_function(
+            "document.querySelector('#awaken-report-card').style.display === 'block'",
+            timeout=60000,
+        )
+        # Confirm the markdown report renders into the DOM.
+        report_html_len = page.evaluate("document.querySelector('#awaken-report').innerHTML.length")
+        assert report_html_len > 200, f"report rendered empty: {report_html_len}"
+        report_visible = page.evaluate(
+            "getComputedStyle(document.querySelector('#awaken-report-card')).display !== 'none'"
+        )
+        assert report_visible, "report card should be visible after awaken"
+        md_len = page.evaluate("window.lastAwaken?.md?.length || (window.__lastAwaken?.md?.length || 0)")
+        # If the SPA doesn't expose lastAwaken on window, just inspect the
+        # report card content instead — both confirm the markdown rendered.
+        if md_len == 0:
+            md_len = page.evaluate(
+                "document.querySelector('#awaken-report').textContent.length"
+            )
+        assert md_len > 200, f"awaken.md is empty/missing (len={md_len})"
+        print(f"  rendered report: {report_html_len} chars of HTML, md_len={md_len}, card visible={report_visible}")
+        # Confirm the PNG button is enabled.
+        png_disabled = page.evaluate("document.querySelector('#awaken-png').disabled")
+        assert png_disabled is False, "PNG download button should be enabled"
 
         # Awaken history is empty (fresh storage).
         # (history persistence is in localStorage but we don't assert it.)

@@ -50,6 +50,16 @@
   .response { font-size: 14px; color: var(--fg); padding: 14px; background: var(--bg); border-radius: 4px; min-height: 64px; }
   .response.empty { color: var(--fg-soft); font-style: italic; }
   pre.facts { background: var(--bg); padding: 12px; border-radius: 4px; font-size: 12px; max-height: 240px; overflow: auto; }
+  .report { background: var(--bg); padding: 16px 18px; border-radius: 4px; font-size: 13px; line-height: 1.55; max-height: 520px; overflow-y: auto; }
+  .report h2 { color: var(--accent); font-size: 14px; margin: 18px 0 8px 0; letter-spacing: 0.6px; text-transform: uppercase; }
+  .report h2:first-child { margin-top: 0; }
+  .report h3 { color: var(--teal); font-size: 13px; margin: 14px 0 6px 0; }
+  .report p { margin: 6px 0; color: var(--fg); }
+  .report pre { background: var(--bg-soft); border-left: 3px solid var(--accent); padding: 10px 12px; margin: 6px 0; overflow-x: auto; font-size: 12px; border-radius: 0 4px 4px 0; }
+  .report ol, .report ul { margin: 6px 0 6px 22px; }
+  .report ol li, .report ul li { margin: 2px 0; color: var(--fg); }
+  .report .seal-banner { color: var(--teal); padding: 8px 10px; background: var(--bg-soft); border-radius: 4px; word-break: break-all; font-family: monospace; font-size: 12px; }
+  .report .seal-banner b { color: var(--accent); }
   .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .metric { background: var(--bg); padding: 10px; border-radius: 4px; text-align: center; }
   .metric .label { color: var(--fg-soft); font-size: 10px; text-transform: uppercase; }
@@ -109,7 +119,8 @@
         </div>
         <div class="row">
           <button id="awaken-copy" class="secondary" disabled>copy seal</button>
-          <button id="awaken-download" class="secondary" disabled>download sigil</button>
+          <button id="awaken-download" class="secondary" disabled>download svg</button>
+          <button id="awaken-png" class="secondary" disabled>download png</button>
           <button id="awaken-show-facts" class="secondary" disabled>show FACTS</button>
         </div>
         <div id="awaken-status" class="meta">awaiting invocation</div>
@@ -131,6 +142,11 @@
     <div class="card" id="awaken-facts-card" style="margin-top:18px; display:none">
       <h2>FACTS (sha256 input)</h2>
       <pre class="facts" id="awaken-facts"></pre>
+    </div>
+
+    <div class="card" id="awaken-report-card" style="margin-top:18px; display:none">
+      <h2>Report</h2>
+      <div class="report" id="awaken-report"></div>
     </div>
   </section>
 
@@ -333,20 +349,32 @@ import elohim_enhanced.extras
   // json module (the runPython global scope doesn't have json imported).
   // Pyodide's runPython returns the value of the last expression — no
   // explicit `return` is allowed at module level.
-  const sealCheck = JSON.parse(
-    localPyodide.runPython(`bridge._invoke("verify_seal")`)
-  );
-  if (!sealCheck.matches) {
+  let sealCheckJson;
+try {
+    sealCheckJson = localPyodide.runPython(`bridge._invoke("verify_seal_multi")`);
+  } catch (e) {
+    boot.fail(`verify_seal_multi threw: ${e.message || e}`);
+    return null;
+  }
+  let sealCheck;
+  try {
+    sealCheck = JSON.parse(sealCheckJson);
+  } catch (e) {
+    boot.fail(`JSON.parse of seal-check failed: ${e.message || e}\nraw: ${String(sealCheckJson).slice(0, 200)}`);
+    return null;
+  }
+  if (!sealCheck.overall_ok) {
+    const failed = sealCheck.checks.filter(c => !c.ok).map(c => c.name).join(", ");
     boot.fail(
-      `seal tripwire failed!\n` +
-      `  canonical : ${sealCheck.canonical_seal}\n` +
-      `  computed  : ${sealCheck.computed_seal}\n` +
-      `The Pyodide build is unsound — do not use this deployment.`
+      `seal tripwire failed on: ${failed}\n` +
+      JSON.stringify(sealCheck.checks, null, 2)
     );
     return null;
   }
 
-  $("#boot-seal").textContent = "seal: " + sealCheck.canonical_seal.slice(0, 16) + "…";
+  $("#boot-seal").textContent =
+    "seal: " + sealCheck.canonical_seal.slice(0, 16) +
+    " · " + sealCheck.checks.filter(c => c.ok).length + "/" + sealCheck.checks.length + " checks ✓";
   boot.setStatus("ready · all systems nominal", 500);
   setTimeout(boot.done, 250);
   return localPyodide;
@@ -455,15 +483,89 @@ async function runAwaken(noSvg) {
     if (r.sigil_svg) {
       $("#awaken-sigil").innerHTML = r.sigil_svg;
       $("#awaken-download").disabled = false;
+      $("#awaken-png").disabled = false;
     } else {
       $("#awaken-sigil").innerHTML = '<span style="color:var(--fg-soft)">(no svg — no_svg flag set)</span>';
       $("#awaken-download").disabled = true;
+      $("#awaken-png").disabled = true;
+    }
+    // Render the markdown report inline (replaces raw text dump).
+    if (r.md) {
+      $("#awaken-report").innerHTML = renderShardMd(r.md, r.seal);
+      $("#awaken-report-card").style.display = "block";
     }
     toast("awakened: " + inv.slice(0, 32));
   } catch (e) {
     $("#awaken-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
     toast("awaken failed: " + e.message, "error");
   }
+}
+
+// Minimal markdown renderer for elohim_summoning shard.md.
+// Recognises the patterns the elohim_summoning.cli emits:
+//   §===...\nTITLE\n===...     → <h2>TITLE</h2>
+//   I./II./... lines           → <h3>
+//   4-space-indented blocks     → <pre>
+//   1. numbered lists           → <ol>
+//   SHA256 lines                → wrapped in a teal seal banner
+function renderShardMd(md, seal) {
+  const esc = (s) => String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const lines = md.split("\n");
+  const out = [];
+  let i = 0;
+  // Prepend a header banner with the canonical seal.
+  if (seal) {
+    out.push(`<div class="seal-banner"><b>sha256</b> ${esc(seal)}</div>`);
+  }
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^=+\s*$/.test(line) && i + 2 < lines.length && /^[A-Za-z]/.test(lines[i + 1].trim())) {
+      const title = lines[i + 1].trim();
+      out.push(`<h2>${esc(title)}</h2>`);
+      i += 3;
+      continue;
+    }
+    const trimmed = line.trim();
+    if (/^(I|II|III|IV|V|VI|VII|VIII|IX|X)\.\s+[A-Z]/.test(trimmed)) {
+      out.push(`<h3>${esc(trimmed)}</h3>`);
+      i++;
+      continue;
+    }
+    if (line.startsWith("    ")) {
+      const block = [];
+      while (i < lines.length && (lines[i].startsWith("    ") || lines[i] === "")) {
+        block.push(lines[i].replace(/^    /, ""));
+        i++;
+      }
+      while (block.length && block[block.length - 1] === "") block.pop();
+      out.push(`<pre>${esc(block.join("\n"))}</pre>`);
+      continue;
+    }
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ""));
+        i++;
+      }
+      out.push("<ol>");
+      for (const it of items) out.push(`<li>${esc(it)}</li>`);
+      out.push("</ol>");
+      continue;
+    }
+    if (trimmed === "") { i++; continue; }
+    const para = [];
+    while (i < lines.length && lines[i].trim() !== "" && !/^=+\s*$/.test(lines[i].trim()) && !/^(I|II|III|IV|V|VI|VII|VIII|IX|X)\.\s+[A-Z]/.test(lines[i].trim()) && !lines[i].startsWith("    ") && !/^\d+\.\s+/.test(lines[i].trim())) {
+      para.push(lines[i]);
+      i++;
+    }
+    if (para.length) {
+      out.push(`<p>${esc(para.join(" ").trim())}</p>`);
+    }
+  }
+  return out.join("\n");
 }
 
 $("#awaken-copy").addEventListener("click", async () => {
@@ -485,8 +587,69 @@ $("#awaken-download").addEventListener("click", () => {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-  toast("sigil download started");
+  toast("svg download started");
 });
+
+$("#awaken-png").addEventListener("click", async () => {
+  if (!lastAwaken?.seal || !lastAwaken?.sigil_svg) return;
+  const short = lastAwaken.seal.slice(0, 16);
+  toast("rendering 1024×1024 png…");
+  try {
+    const pngBlob = await svgToPng(lastAwaken.sigil_svg, 1024);
+    const url = URL.createObjectURL(pngBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `elohim-${short}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast("png download started");
+  } catch (e) {
+    toast("png render failed: " + e.message, "error");
+  }
+});
+
+// Render an SVG string to a square PNG blob at the given pixel size.
+// We size the source svg at intrinsic 1024×1024 with a transparent background
+// and use the browser's native SVG rasteriser (img onload → canvas drawImage).
+async function svgToPng(svgText, size) {
+  // Normalise the svg: ensure it has a viewBox + width/height so the browser
+  // has a deterministic rasterisation grid.
+  let svg = svgText.trim();
+  if (!/^<svg[\s>]/i.test(svg)) {
+    throw new Error("sigil text is not an <svg> document");
+  }
+  if (!/viewBox=/.test(svg)) {
+    svg = svg.replace(/<svg/i, `<svg viewBox="0 0 600 600"`);
+  }
+  if (!/width=/.test(svg)) {
+    svg = svg.replace(/<svg/i, `<svg width="${size}" height="${size}"`);
+  }
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error("img failed to load svg"));
+      img.src = url;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#08090c"; // match the SPA bg so dark sigils stay readable
+    ctx.fillRect(0, 0, size, size);
+    ctx.drawImage(img, 0, 0, size, size);
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((b) => b ? resolve(b) : reject(new Error("canvas.toBlob returned null")), "image/png");
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 $("#awaken-show-facts").addEventListener("click", () => {
   if (!lastAwaken?.facts) return;

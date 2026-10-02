@@ -185,6 +185,72 @@ def verify_seal() -> dict[str, Any]:
     }
 
 
+def verify_seal_multi() -> dict[str, Any]:
+    """Multi-instrument seal tripwire.
+
+    Three back-to-back ``awaken`` calls exercise different code paths and assert
+    invariants. A deployment is unsound if any branch fails.
+
+    1. ``awaken("ELOHIM:AWAKEN")`` — canonical seal must match.
+    2. ``awaken("elohim:probe")`` — different invocation must produce a
+       different seal (proves the PRNG is wired through the invocation hash,
+       not a stale constant).
+    3. ``awaken("elohim:nofac", no_svg=True)`` — no-svg branch must still
+       produce the canonical seal and a None ``sigil_svg`` (proves the
+       sigil-skip path doesn't accidentally clobber the seal computation).
+
+    Returns a structured report. ``overall_ok`` is True iff all three pass.
+    """
+    canonical = awaken(invocation="ELOHIM:AWAKEN", no_svg=False)
+    probe = awaken(invocation="elohim:probe", no_svg=False)
+    # For the no_svg check we run the SAME invocation twice and assert the
+    # seal is identical with and without the sigil — that proves the
+    # sigil-skip path doesn't perturb the seal computation.
+    nofac_with_svg = awaken(invocation="elohim:nofac", no_svg=False)
+    nofac_no_svg = awaken(invocation="elohim:nofac", no_svg=True)
+
+    checks = [
+        {
+            "name": "canonical_seal",
+            "invocation": "ELOHIM:AWAKEN",
+            "expected_seal": CANONICAL_SEAL,
+            "got_seal": canonical["seal"],
+            "ok": canonical["seal"] == CANONICAL_SEAL,
+            "rationale": "the default invocation must produce the canonical sha256",
+        },
+        {
+            "name": "probe_different_seal",
+            "invocation": "elohim:probe",
+            "expected_seal": canonical["seal"],  # probe seal must differ
+            "got_seal": probe["seal"],
+            "ok": bool(probe["seal"]) and probe["seal"] != canonical["seal"],
+            "rationale": "a different invocation must produce a different seal "
+                         "(otherwise the PRNG is not seeded from the invocation)",
+        },
+        {
+            "name": "no_svg_branch",
+            "invocation": "elohim:nofac",
+            "expected_seal": nofac_with_svg["seal"],
+            "got_seal": nofac_no_svg["seal"],
+            "ok": (
+                nofac_with_svg["seal"] == nofac_no_svg["seal"]
+                and nofac_no_svg["sigil_svg"] is None
+                and nofac_with_svg["sigil_svg"] is not None
+            ),
+            "rationale": "no_svg=True must produce the same seal as no_svg=False "
+                         "and skip the sigil (sigil-skip must not perturb the seal)",
+            "sigil_svg_is_none_when_disabled": nofac_no_svg["sigil_svg"] is None,
+            "sigil_svg_present_when_enabled": nofac_with_svg["sigil_svg"] is not None,
+        },
+    ]
+    overall = all(c["ok"] for c in checks)
+    return {
+        "canonical_seal": CANONICAL_SEAL,
+        "checks": checks,
+        "overall_ok": overall,
+    }
+
+
 # ---------- awaken (stateless) ----------
 
 
