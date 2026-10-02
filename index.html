@@ -83,6 +83,11 @@
   .arena-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px; color: var(--fg-soft); }
   .arena-stats .stat { background: var(--bg); padding: 4px 8px; border-radius: 3px; }
   .arena-stats .stat b { color: var(--accent); }
+  .embed-card { background: var(--bg); border-radius: 4px; padding: 10px 12px; margin-top: 10px; }
+  .embed-legend { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--fg-soft); margin-bottom: 8px; }
+  .embed-toggle { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .embed-toggle code { background: var(--bg-soft); padding: 1px 4px; border-radius: 3px; }
+  .embed-output { background: var(--bg-soft); padding: 10px; border-radius: 4px; font-size: 11px; max-height: 96px; overflow: auto; margin: 8px 0 0 0; word-break: break-all; }
   .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .metric { background: var(--bg); padding: 10px; border-radius: 4px; text-align: center; }
   .metric .label { color: var(--fg-soft); font-size: 10px; text-transform: uppercase; }
@@ -212,6 +217,20 @@
           <input id="create-temp-input" type="number" step="0.1" min="0.1" max="2.0" value="1.0"/>
           <button id="create-temp-set">set temperature</button>
         </div>
+        <div class="embed-card">
+          <div class="embed-legend">
+            <label class="embed-toggle">
+              <input type="checkbox" id="embed-real-toggle" />
+              <span>use real embeddings (dev-only · Ollama <code>nomic-embed-text</code>)</span>
+            </label>
+            <span class="meta" id="embed-status">hash stub (offline)</span>
+          </div>
+          <div class="row">
+            <input id="embed-input" type="text" placeholder="text to embed…" />
+            <button id="embed-run" class="secondary">embed</button>
+          </div>
+          <pre class="embed-output" id="embed-output">(no output yet)</pre>
+        </div>
         <div class="timeline-card">
           <div class="timeline-legend">
             <span><i style="background:var(--accent)"></i>creativity</span>
@@ -329,7 +348,7 @@ $$(".tab").forEach((t) => t.addEventListener("click", () => {
 
 // --- pyodide boot ---
 
-const PYODIDE_VERSION = "0.27.7";
+const PYODIDE_VERSION = "0.27.8";
 const PYODIDE_INDEX = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 
 async function bootPyodide() {
@@ -505,6 +524,19 @@ const elohim = {
 
 window.elohim = elohim;
 
+// Parse sharable URL deep links from `location.search`. Supported params:
+//   ?invocation=foo  → after boot, run awaken("foo") on the Awaken tab
+//   ?shard=<id>      → after boot, switch to the Create tab and select the shard
+//   ?tab=awaken|create|arena  → open the named tab on boot
+function readDeepLinks() {
+  const out = {};
+  const params = new URLSearchParams(location.search);
+  if (params.has("invocation")) out.invocation = params.get("invocation");
+  if (params.has("shard")) out.shard = params.get("shard");
+  if (params.has("tab")) out.tab = params.get("tab");
+  return out;
+}
+
 (async function () {
   try {
     pyodide = await bootPyodide();
@@ -518,6 +550,49 @@ window.elohim = elohim;
       bridgeReady = true;
     } catch (e) {
       console.error("version() failed:", e);
+    }
+
+    // Dispatch any sharable URL deep links.
+    const links = readDeepLinks();
+    if (links.invocation) {
+      $("#awaken-invocation").value = links.invocation;
+      // Default tab to awaken if no explicit tab given.
+      links.tab = links.tab || "awaken";
+    }
+    if (links.tab) {
+      const tabMap = { awaken: "tab-awaken", create: "tab-create", arena: "tab-arena" };
+      const tabId = tabMap[links.tab];
+      if (tabId) {
+        // For tabs that need numpy, click them so their handler loads deps.
+        if (links.tab === "create" || links.tab === "arena") {
+          const t = $("#" + tabId);
+          if (t && !t.disabled) t.click();
+        } else {
+          $$(".tab").forEach(x => x.classList.toggle("active", x.id === tabId));
+          $$(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + links.tab));
+        }
+      }
+    }
+    if (links.shard) {
+      // The shard selection lives on the Create panel. If the panel isn't
+      // active yet, queue the selection for after the user opens it.
+      window.__pendingShardId = links.shard;
+      // Best effort: if the Create panel is now active and has a populated
+      // select, set it directly.
+      const sel = $("#create-shard-select");
+      if (sel && sel.options.length > 0) {
+        const has = Array.from(sel.options).some(o => o.value === links.shard);
+        if (has) {
+          sel.value = links.shard;
+          activeShardId = links.shard;
+          refreshDashboard();
+        }
+      }
+    }
+    if (links.invocation) {
+      // Auto-run awaken with the invocation from the URL.
+      try { await runAwaken(false); }
+      catch (e) { console.error("deep-link awaken failed:", e); }
     }
   } catch (e) {
     boot.fail(e.message || String(e));
@@ -816,6 +891,21 @@ $("#tab-create").addEventListener("click", async () => {
     $$(".tab").forEach((x) => x.classList.toggle("active", x === tab));
     $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-create"));
     await refreshShards();
+    // Apply any pending ?shard= deep-link selection that was queued before
+    // numpy was loaded.
+    const pending = window.__pendingShardId;
+    if (pending) {
+      const sel = $("#create-shard-select");
+      if (sel) {
+        const has = Array.from(sel.options).some(o => o.value === pending);
+        if (has) {
+          sel.value = pending;
+          activeShardId = pending;
+          refreshDashboard();
+          window.__pendingShardId = null;
+        }
+      }
+    }
   } catch (e) {
     tab.classList.remove("loading");
     tab.classList.add("pending");
@@ -1059,6 +1149,80 @@ async function renderDefianceFeed(shardId, justAdded) {
 function escapeHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+// ----- Embed panel: hash-based stub vs Ollama nomic-embed-text -----
+
+// Hash-based stub: 32 deterministic floats derived from a sha256-like fold.
+// Stable across reloads; no network.
+function hashEmbed(text, dim = 16) {
+  const out = new Array(dim);
+  let seed = 0;
+  for (let i = 0; i < text.length; i++) seed = ((seed * 31) + text.charCodeAt(i)) | 0;
+  for (let i = 0; i < dim; i++) {
+    seed = (seed * 1103515245 + 12345) | 0;
+    out[i] = ((seed >>> 0) / 0xffffffff) - 0.5; // [-0.5, 0.5]
+  }
+  // L2-normalise so cosine comparison is meaningful.
+  let norm = 0;
+  for (const v of out) norm += v * v;
+  norm = Math.sqrt(norm) || 1;
+  return out.map(v => v / norm);
+}
+
+// Real embedding via Ollama. Ollama exposes /api/embeddings; we wrap it.
+async function ollamaEmbed(text, model = "nomic-embed-text") {
+  const r = await fetch("http://127.0.0.1:11434/api/embeddings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt: text }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  return j.embedding;
+}
+
+async function embedText(text) {
+  const useReal = $("#embed-real-toggle").checked;
+  const status = $("#embed-status");
+  if (useReal) {
+    status.textContent = "calling Ollama…";
+    try {
+      const v = await ollamaEmbed(text);
+      status.innerHTML = `<span class="ok">ollama</span> · ${v.length} dims`;
+      return { source: "ollama", vector: v };
+    } catch (e) {
+      status.innerHTML = `<span class="error">ollama unreachable</span> · ${e.message}`;
+      throw e;
+    }
+  } else {
+    const v = hashEmbed(text);
+    status.textContent = `hash stub · ${v.length} dims`;
+    return { source: "hash", vector: v };
+  }
+}
+
+$("#embed-run").addEventListener("click", async () => {
+  const text = $("#embed-input").value;
+  if (!text) { toast("type some text first", "error"); return; }
+  try {
+    const { source, vector } = await embedText(text);
+    const head = vector.slice(0, 8).map(v => v.toFixed(4)).join(", ");
+    $("#embed-output").textContent =
+      `${source} · ${vector.length}-dim · head=[${head}, …]`;
+  } catch (e) {
+    $("#embed-output").textContent = "embed failed: " + e.message;
+  }
+});
+
+$("#embed-real-toggle").addEventListener("change", () => {
+  const useReal = $("#embed-real-toggle").checked;
+  const status = $("#embed-status");
+  if (useReal) {
+    status.innerHTML = `<span class="meta">toggled on · will call Ollama on next embed</span>`;
+  } else {
+    status.textContent = "hash stub (offline)";
+  }
+});
 
 $("#create-temp-set").addEventListener("click", async () => {
   if (!activeShardId) return;
