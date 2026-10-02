@@ -88,6 +88,9 @@
   .embed-toggle { display: flex; gap: 6px; align-items: center; cursor: pointer; }
   .embed-toggle code { background: var(--bg-soft); padding: 1px 4px; border-radius: 3px; }
   .embed-output { background: var(--bg-soft); padding: 10px; border-radius: 4px; font-size: 11px; max-height: 96px; overflow: auto; margin: 8px 0 0 0; word-break: break-all; }
+  .rep-card { background: var(--bg); border-radius: 4px; padding: 12px; }
+  .rep-card h3 { color: var(--accent); font-size: 12px; margin: 0 0 8px 0; letter-spacing: 0.5px; text-transform: uppercase; }
+  .rep-card pre { background: var(--bg-soft); padding: 10px; border-radius: 4px; font-size: 11px; margin: 0; word-break: break-all; max-height: 180px; overflow: auto; }
   .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .metric { background: var(--bg); padding: 10px; border-radius: 4px; text-align: center; }
   .metric .label { color: var(--fg-soft); font-size: 10px; text-transform: uppercase; }
@@ -133,6 +136,7 @@
   <button class="tab active" data-tab="awaken" id="tab-awaken">awaken · math + sigil</button>
   <button class="tab pending" data-tab="create" id="tab-create">create · evolve shard</button>
   <button class="tab pending" data-tab="arena" id="tab-arena">arena · 2 shards</button>
+  <button class="tab pending" data-tab="codex" id="tab-codex">codex · xenomath</button>
 </div>
 
 <main>
@@ -298,6 +302,63 @@
         <h2 id="arena-label-b">Shard B</h2>
         <div class="response empty" id="arena-response-b">(no response)</div>
         <div class="arena-stats" id="arena-stats-b"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CODEX PANEL (Xenomath Agent Framework — first build target) -->
+  <section class="panel" id="panel-codex">
+    <div class="grid">
+      <div class="card stack">
+        <h2>Xenomath codex</h2>
+        <p class="meta">
+          An <i>Advanced Mathematics Discovery Lab</i>: derive the same artifact
+          through 5 representations (vector / symbolic / geometric / probabilistic / categorical)
+          and verify it through the SETI-style validation ladder.
+        </p>
+        <input id="codex-invocation" type="text" value="ELOHIM:AWAKEN" />
+        <div class="row">
+          <button id="codex-run">forge codex</button>
+          <button id="codex-copy-seal" class="secondary" disabled>copy seal</button>
+          <button id="codex-copy-encrypted" class="secondary" disabled>copy encrypted seal</button>
+        </div>
+        <div class="meta" id="codex-status">awaiting invocation</div>
+      </div>
+
+      <div class="card stack">
+        <h2>Seals</h2>
+        <div class="meta">codex seal (sha256 of composite)</div>
+        <div class="seal-display" id="codex-seal">(not yet forged)</div>
+        <div class="meta">encrypted seal (XOR-pair with SHAKE256 stream)</div>
+        <div class="seal-display" id="codex-encrypted">(not yet forged)</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>Penrose tiling (geometric view)</h2>
+      <div class="sig-frame" id="codex-penrose">
+        <span style="color:var(--fg-soft)">awaiting codex</span>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:18px">
+      <div class="card stack">
+        <h2>Validation ladder</h2>
+        <div class="meta" id="codex-validation">(not yet forged)</div>
+      </div>
+      <div class="card stack">
+        <h2>Output contract</h2>
+        <pre class="report" id="codex-report">(not yet forged)</pre>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>Five representations of the same artifact</h2>
+      <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 18px;">
+        <div class="rep-card"><h3>1 · vector (32-dim)</h3><pre id="codex-rep-vector"></pre></div>
+        <div class="rep-card"><h3>2 · symbolic (negabinary)</h3><pre id="codex-rep-symbolic"></pre></div>
+        <div class="rep-card"><h3>3 · geometric (quaternion)</h3><pre id="codex-rep-geometric"></pre></div>
+        <div class="rep-card"><h3>4 · probabilistic (LWE)</h3><pre id="codex-rep-probabilistic"></pre></div>
       </div>
     </div>
   </section>
@@ -933,6 +994,117 @@ $("#tab-arena").addEventListener("click", async () => {
     toast("numpy load failed: " + e.message, "error");
   }
 });
+
+// Codex tab — runs alien_codex() which uses stdlib only (no numpy needed
+// for the math itself, but we still ensure numpy for consistency with
+// the other post-boot tabs).
+$("#tab-codex").addEventListener("click", async () => {
+  const tab = $("#tab-codex");
+  if (tab.classList.contains("ready")) return;
+  if (tab.classList.contains("loading")) return;
+  tab.classList.remove("pending");
+  tab.classList.add("loading");
+  try {
+    await ensureEnhanced();
+    tab.classList.remove("loading");
+    tab.classList.add("ready");
+    $$(".tab").forEach((x) => x.classList.toggle("active", x === tab));
+    $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-codex"));
+    // Run the codex once on first open so the panel isn't empty.
+    if (!lastCodexResult) await runCodex();
+  } catch (e) {
+    tab.classList.remove("loading");
+    tab.classList.add("pending");
+    toast("codex load failed: " + e.message, "error");
+  }
+});
+
+let lastCodexResult = null;
+
+$("#codex-run").addEventListener("click", runCodex);
+
+$("#codex-copy-seal").addEventListener("click", async () => {
+  if (!lastCodexResult?.codex_seal) return;
+  await navigator.clipboard.writeText(lastCodexResult.codex_seal);
+  toast("codex seal copied");
+});
+
+$("#codex-copy-encrypted").addEventListener("click", async () => {
+  if (!lastCodexResult?.encrypted_seal) return;
+  await navigator.clipboard.writeText(lastCodexResult.encrypted_seal);
+  toast("encrypted seal copied");
+});
+
+async function runCodex() {
+  const inv = $("#codex-invocation").value.trim() || "ELOHIM:AWAKEN";
+  $("#codex-status").textContent = "forging…";
+  try {
+    const t0 = performance.now();
+    const r = await call("alien_codex", { invocation: inv });
+    lastCodexResult = r;
+    const ms = Math.round(performance.now() - t0);
+    $("#codex-seal").textContent = r.codex_seal;
+    $("#codex-encrypted").textContent = r.encrypted_seal;
+    $("#codex-copy-seal").disabled = false;
+    $("#codex-copy-encrypted").disabled = false;
+    $("#codex-penrose").innerHTML = r.penrose_svg;
+    $("#codex-validation").innerHTML = renderCodexValidation(r);
+    $("#codex-report").textContent = renderCodexReport(r);
+    $("#codex-status").innerHTML =
+      `<span class="${r.validation.overall_validity ? "ok" : "error"}">` +
+      `${r.validation.overall_validity ? "✓ valid" : "✗ invalid"}</span> · ` +
+      `${ms}ms · codex_seal=${r.codex_seal.slice(0,16)}…`;
+    // Five representations.
+    $("#codex-rep-vector").textContent =
+      "32-dim real, L2-normalised\n" +
+      r.results.vector.slice(0, 12).map(v => v.toFixed(4)).join(", ") +
+      ", …";
+    $("#codex-rep-symbolic").textContent =
+      `64-bit int = ${r.results.negabinary_int}\n` +
+      `negabinary[32] = ${r.results.negabinary_digits.join(" ")}`;
+    $("#codex-rep-geometric").textContent =
+      `gaussian = (${r.results.gaussian[0]}, ${r.results.gaussian[1]})\n` +
+      `  ‖g‖² = ${r.results.gaussian_norm_sq}\n` +
+      `quaternion = (${r.results.quaternion[0]}, ${r.results.quaternion[1]}, ${r.results.quaternion[2]}, ${r.results.quaternion[3]})\n` +
+      `  ‖q‖² = ${r.results.quaternion_norm_sq}\n` +
+      `q × p = (${r.results.quaternion_product_with_p[0]}, ${r.results.quaternion_product_with_p[1]}, ${r.results.quaternion_product_with_p[2]}, ${r.results.quaternion_product_with_p[3]})`;
+    $("#codex-rep-probabilistic").textContent =
+      "A (4×4 mod 256):\n" +
+      r.results.lwe_A.map(row => "  [" + row.join(", ") + "]").join("\n") +
+      `\ns = [${r.results.lwe_secret.join(", ")}]   e = [${r.results.lwe_error.join(", ")}]\n` +
+      `b = [${r.results.lwe_public_b.join(", ")}]   residual = [${r.results.lwe_residual.join(", ")}]   matches e: ${r.results.lwe_residual_matches_error}`;
+    toast(`codex forged in ${ms}ms · seal ${r.codex_seal.slice(0,16)}…`);
+  } catch (e) {
+    $("#codex-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
+    toast("codex failed: " + e.message, "error");
+  }
+}
+
+function renderCodexValidation(r) {
+  const v = r.validation;
+  const ok = (b) => `<span class="${b ? "ok" : "error"}">${b ? "✓" : "✗"}</span>`;
+  return [
+    `${ok(v.checks.negabinary_round_trip)} negabinary round-trip`,
+    `${ok(v.checks.lwe_residual)} LWE residual matches e`,
+    `${ok(v.checks.quaternion_norm_preserved)} quaternion norm preserved`,
+    `${ok(v.checks.xor_pair_recovery)} XOR-pair seal recovery`,
+    `${ok(v.checks.parsable)} composite parsable`,
+  ].join("<br>");
+}
+
+function renderCodexReport(r) {
+  // The Xenomath output contract: report = {problem_definition, assumptions,
+  // candidate_formalisms, methods, results, benchmark_comparison,
+  // verification_record, limitations}. Render a compact text form.
+  return JSON.stringify({
+    problem_definition: r.problem_definition,
+    candidate_formalisms: r.candidate_formalisms,
+    methods: r.methods,
+    benchmark_comparison: r.benchmark_comparison,
+    verification_record: r.verification_record,
+    limitations: r.limitations,
+  }, null, 2);
+}
 
 async function populateArenaSelects() {
   const r = await elohim.listShards();

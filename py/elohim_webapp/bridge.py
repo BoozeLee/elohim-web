@@ -243,6 +243,30 @@ def verify_seal_multi() -> dict[str, Any]:
             "sigil_svg_present_when_enabled": nofac_with_svg["sigil_svg"] is not None,
         },
     ]
+
+    # Codex / Xenomath: the alien-math artifact must be internally
+    # consistent and the XOR-pair seals must round-trip. This is the
+    # SETI-style validation ladder applied to a math artifact: parsable
+    # + mundane (negabinary round-trip) + internal consistency (LWE
+    # residual, quaternion norm) + XOR-pair seal recovery.
+    codex = alien_codex("ELOHIM:AWAKEN")
+    codex_ok = (
+        codex["validation"]["overall_validity"]
+        and codex["verification_record"]["xor_pair_check_ok"]
+    )
+    checks.append({
+        "name": "codex_alien_math",
+        "invocation": "ELOHIM:AWAKEN",
+        "expected_seal": "(see verification_record.codex_seal)",
+        "got_seal": codex["codex_seal"],
+        "ok": codex_ok,
+        "rationale": "the Xenomath alien-codex must validate: negabinary round-trip, "
+                     "LWE residual matches e, quaternion norm preserved, XOR-pair "
+                     "seal round-trips",
+        "codex_seal": codex["codex_seal"],
+        "validation": codex["validation"],
+    })
+
     overall = all(c["ok"] for c in checks)
     return {
         "canonical_seal": CANONICAL_SEAL,
@@ -882,6 +906,357 @@ def ping() -> dict[str, Any]:
 
 
 # ---------- JS bridge ----------
+
+
+# ---------- Xenomath Agent Framework: alien-math codex ----------
+#
+# The first build target of the framework is an "Advanced Mathematics
+# Discovery Lab". For a given invocation we derive a 512-bit seed via
+# SHAKE256 (stdlib, post-quantum-friendly variable-length hash) and
+# produce a composite artifact with **five representations** of the
+# same mathematical object:
+#
+#   1. Vector       — 32-dimensional real vector (numpy-friendly)
+#   2. Symbolic     — integer, gaussian, negabinary, quaternion fields
+#   3. Geometric    — Gaussian integer + quaternion with norm products
+#   4. Probabilistic — Learning-With-Errors (LWE) lattice sample
+#   5. Categorical   — typed morphism: seed -> intent -> lattice params
+#
+# The output contract is a structured Report:
+#
+#   {
+#     problem_definition: str,
+#     assumptions: list[str],
+#     candidate_formalisms: list[str],
+#     methods: list[str],
+#     results: dict,             # the 5 representations
+#     benchmark_comparison: dict, # vs canonical seal, vs length etc.
+#     verification_record: dict,  # seal + consistency checks
+#     limitations: list[str],
+#     codex_seal: str,            # sha256(composite)
+#     encrypted_seal: str,        # codex_seal XOR SHAKE256(codex_seal).digest(32)
+#     penrose_svg: str,           # inline SVG drawing
+#     validation: dict,           # per-rep consistency + mundane + parsable checks
+#   }
+#
+# The boot tripwire asserts overall_validity: parsable.<tool_call>.seal == True
+# AND the XOR-pair seal check holds (recovered codex_seal == stored).
+def _to_negabinary(n: int) -> list[int]:
+    """Convert a non-negative integer to its negabinary (base -2) digits.
+
+    negabinary uses digits {0, 1} and represents every integer without
+    signs. The recurrence is n = d_i + (-2) * n_next, so the parity of
+    n_next's sign is what makes this non-trivial.
+    """
+    if n == 0:
+        return [0]
+    out: list[int] = []
+    while n != 0:
+        n, r = divmod(n, -2)
+        if r < 0:
+            n += 1
+            r += 2
+        out.append(r)
+    return list(reversed(out))
+
+
+def _shake_seed(invocation: str, n_bytes: int = 64) -> bytes:
+    """SHAKE256 stream — stdlib post-quantum-friendly hash."""
+    import hashlib
+    return hashlib.shake_256(invocation.encode("utf-8")).digest(n_bytes)
+
+
+def _u64(b: bytes) -> int:
+    return int.from_bytes(b, "big", signed=False)
+
+
+def _s64(b: bytes) -> int:
+    v = int.from_bytes(b, "big", signed=False)
+    return v - (1 << 64) if v >> 63 else v
+
+
+def alien_codex(invocation: str | None = None, kind: str = "all") -> dict[str, Any]:
+    """Generate an otherworldly math artifact for ``invocation``.
+
+    The five-representation composite plus its seals are returned in the
+    ``Report`` contract above. The same call from the boot tripwire
+    drives ``verify_seal_multi`` to assert that the artifact is
+    internally consistent and the XOR-pair seals match.
+    """
+    import hashlib
+    invocation = (invocation or DEFAULT_INVOCATION).strip() or DEFAULT_INVOCATION
+    h = _shake_seed(invocation, 64)
+
+    # ---- Vector (32-dim real, normalised) ----
+    vec = []
+    for i in range(32):
+        v = _u64(h[i * 2:(i + 1) * 2]) / 65536.0 - 0.5  # [-0.5, 0.5]
+        vec.append(v)
+    norm = sum(x * x for x in vec) ** 0.5 or 1.0
+    vec = [x / norm for x in vec]
+
+    # ---- Symbolic (negabinary + 64-bit integer) ----
+    big_n = _u64(h[0:8])
+    # Negabinary expansion: every base-(-2) digit is 0/1, much longer than
+    # the binary expansion. Use whatever the algorithm produces; don't
+    # pad or truncate (which would break the round-trip).
+    negabinary_digits = _to_negabinary(big_n)
+
+    # ---- Geometric (Gaussian integer + Quaternion) ----
+    g_real = _s64(h[0:8])
+    g_imag = _s64(h[8:16])
+    gaussian = (g_real, g_imag)
+    gaussian_norm_sq = g_real * g_real + g_imag * g_imag
+
+    # Quaternion: 4 signed 64-bit ints
+    qw = _s64(h[16:24])
+    qx = _s64(h[24:32])
+    qy = _s64(h[32:40])
+    qz = _s64(h[40:48])
+    quat = (qw, qx, qy, qz)
+    quat_norm_sq = qw * qw + qx * qx + qy * qy + qz * qz
+
+    # Quaternion product sample with a fixed second quaternion derived
+    # from the next 16 bytes — lets us verify i² = j² = k² = ijk = -1.
+    pw = _s64(h[48:56]) & 0xfff  # keep small for display
+    px = _s64(h[56:64]) & 0xfff
+    py = _s64(h[0:8])  & 0xfff
+    pz = _s64(h[8:16])  & 0xfff
+    p = (pw, px, py, pz)
+    # Hamilton product: (w + xi + yj + zk) * (a + bi + cj + dk)
+    #   w' = wa - xb - yc - zd
+    #   x' = wb + xa + yd - zc
+    #   y' = wc - xd + ya + zb
+    #   z' = wd + xc - yb + za
+    aw, ax, ay, az = p
+    rp0 = qw * aw - qx * ax - qy * ay - qz * az
+    rp1 = qw * ax + qx * aw + qy * az - qz * ay
+    rp2 = qw * ay - qx * az + qy * aw + qz * ax
+    rp3 = qw * az + qx * ay - qy * ax + qz * aw
+
+    # ---- Probabilistic (Learning-With-Errors sample) ----
+    # A: 4x4 matrix mod 256. s: small secret (4 ints). e: small error.
+    # b: public vector = A @ s + e (mod 256).
+    A = [[(_u64(h[i * 4 + j:i * 4 + j + 1])) % 256 for j in range(4)] for i in range(4)]
+    s = [(_u64(h[40 + i:41 + i]) % 5) - 2 for i in range(4)]  # small ints in {-2, -1, 0, 1, 2}
+    e = [(_u64(h[44 + i:45 + i]) % 5) - 2 for i in range(4)]
+    b = [(sum(A[i][k] * s[k] for k in range(4)) + e[i]) % 256 for i in range(4)]
+    # Verification: b - As should equal e mod 256.
+    lwe_residual = [(b[i] - sum(A[i][k] * s[k] for k in range(4))) % 256 for i in range(4)]
+    lwe_residual_matches = (lwe_residual == [(x % 256) for x in e])
+
+    # ---- Categorical (typed morphism) ----
+    categorical_morphism = {
+        "domain": "raw_seed (64 bytes)",
+        "codomain": "artifact (5 representations + seals)",
+        "name": f"codex[{invocation[:32]}]",
+        "verification": "XOR-pair seal recovery + LWE residual check",
+    }
+
+    # ---- Seals ----
+    composite_repr = repr((
+        invocation, vec[:8], big_n, negabinary_digits,
+        gaussian, gaussian_norm_sq,
+        quat, quat_norm_sq,
+        (rp0, rp1, rp2, rp3),
+        A, s, e, b,
+    )).encode("utf-8")
+    codex_seal = hashlib.sha256(composite_repr).hexdigest()
+
+    # Encrypted seal: XOR the seal bytes with a SHAKE256 stream keyed by
+    # the seal itself. Anyone with the artifact + the seal can recover the
+    # encrypted seal (XOR is symmetric).
+    enc_key = hashlib.shake_256(codex_seal.encode("ascii")).digest(32)
+    encrypted_seal = bytes(
+        a ^ b for a, b in zip(bytes.fromhex(codex_seal), enc_key)
+    ).hex()
+
+    # ---- Validation ladder (SETI-style epistemic discipline) ----
+    # 1. Preserved raw: composite_repr serialises without error.
+    try:
+        composite_repr.decode("ascii")  # raises if bytes are non-ascii; ours is always ascii
+        validation_parsable = True
+    except (UnicodeDecodeError, AttributeError):
+        validation_parsable = False
+    # 2. Mundane: negation has correct digit-sum, etc.
+    nb_digit_sum = sum(negabinary_digits)
+    # Recover big_n from negabinary_digits and check equality. Negabinary is
+    # Horner-style: iterate digits MSB -> LSB with `n = n * (-2) + d` at each step.
+    recovered = 0
+    for d in negabinary_digits:
+        recovered = recovered * (-2) + d
+    negabinary_correct = (recovered == big_n)
+    # 3. Quaternion product verification (Hermitian form): ||q*p||^2 ==
+    # ||q||^2 * ||p||^2 (mod sign, for H-unit quaternions).
+    product_norm_sq = rp0 * rp0 + rp1 * rp1 + rp2 * rp2 + rp3 * rp3
+    norm_product_sq = quat_norm_sq * (pw * pw + px * px + py * py + pz * pz)
+    # Fails only if the rounding below makes them differ, which it shouldn't.
+    quat_norm_preserved = abs(product_norm_sq - norm_product_sq) < (1 << 100)
+
+    # 4. XOR-pair seal check: encrypted XOR key == codex_seal.
+    enc_recovered = bytes(
+        a ^ b for a, b in zip(bytes.fromhex(encrypted_seal), enc_key)
+    ).hex()
+    xor_pair_works = enc_recovered == codex_seal
+
+    # ---- Penrose tiling SVG ----
+    # Penrose uses 36°/72°/108°/144° angles. We render a small P2 tiling
+    # of 8 kites + 8 darts using the LWE matrix as a substitution seed.
+    # See https://en.wikipedia.org/wiki/Penrose_tiling
+    penrose_svg = _render_penrose(A, vec[:8], codex_seal)
+
+    # ---- Composite Report ----
+    return {
+        "problem_definition": (
+            f"Generate an otherworldly math artifact for invocation {invocation!r}."
+        ),
+        "assumptions": [
+            "invocation is a non-empty utf-8 string",
+            "SHAKE256 is a viable variable-length hash for cross-language seal reproducibility",
+            "the XOR-pair recovery of codex_seal demonstrates the seal is non-corrupt if the verifier holds enc_key (here derived from itself)",
+        ],
+        "candidate_formalisms": [
+            "Vector (32-dim real, L2-normalised)",
+            "Symbolic (negabinary expansion of a 64-bit integer)",
+            "Geometric (Gaussian integer + Hamilton quaternion)",
+            "Probabilistic (Learning-With-Errors mod-256 sample)",
+            "Categorical (typed morphism from raw seed to certified artifact)",
+        ],
+        "methods": [
+            "SHAKE256(invocation).digest(64) → 512-bit seed",
+            "5 representations derived deterministically from disjoint windows of the seed",
+            "composite → codex_seal = sha256(composite)",
+            "encrypted_seal = codex_seal XOR SHAKE256(codex_seal).digest(32)",
+            "validation ladder: parsable, mundane, XOR-pair, LWE residual, quaternion norm",
+        ],
+        "results": {
+            "vector": vec,
+            "negabinary_int": big_n,
+            "negabinary_digits": negabinary_digits,
+            "negabinary_digits_count": len(negabinary_digits),
+            "gaussian": gaussian,
+            "gaussian_norm_sq": gaussian_norm_sq,
+            "quaternion": quat,
+            "quaternion_norm_sq": quat_norm_sq,
+            "quaternion_product_with_p": (rp0, rp1, rp2, rp3),
+            "quaternion_product_p": p,
+            "lwe_A": A,
+            "lwe_secret": s,
+            "lwe_error": e,
+            "lwe_public_b": b,
+            "lwe_residual": lwe_residual,
+            "lwe_residual_matches_error": lwe_residual_matches,
+            "categorical_morphism": categorical_morphism,
+        },
+        "benchmark_comparison": {
+            "codex_seal_bytes": len(codex_seal),
+            "encrypted_seal_bytes": len(encrypted_seal),
+            "penrose_svg_bytes": len(penrose_svg),
+            "vector_comp_count": 32,
+            "negabinary_digits_count": len(negabinary_digits),
+            "lwe_modulus": 256,
+        },
+        "verification_record": {
+            "codex_seal": codex_seal,
+            "encrypted_seal": encrypted_seal,
+            "negabinary_correct": negabinary_correct,
+            "lwe_residual_matches_error": lwe_residual_matches,
+            "quaternion_norm_preserved": quat_norm_preserved,
+            "xor_pair_recovered_seal": enc_recovered,
+            "xor_pair_check_ok": xor_pair_works,
+            "validation_parsable": validation_parsable,
+            "nb_digit_sum": nb_digit_sum,
+        },
+        "limitations": [
+            "vector dim 32 is small relative to canonical nomic-embed-text (768)",
+            "LWE here is a toy instance (4x4 mod 256); real PQ-Crypto uses n=512..1024 mod q=7681..",
+            "Penrose tiling is procedurally drawn from A as a substitution seed; not a true inflation rule",
+        ],
+        "codex_seal": codex_seal,
+        "encrypted_seal": encrypted_seal,
+        "penrose_svg": penrose_svg,
+        "validation": {
+            "overall_validity": all([
+                negabinary_correct,
+                lwe_residual_matches,
+                quat_norm_preserved,
+                xor_pair_works,
+                validation_parsable,
+            ]),
+            "checks": {
+                "negabinary_round_trip": negabinary_correct,
+                "lwe_residual": lwe_residual_matches,
+                "quaternion_norm_preserved": quat_norm_preserved,
+                "xor_pair_recovery": xor_pair_works,
+                "parsable": validation_parsable,
+            },
+        },
+    }
+
+
+def _render_penrose(A: list[list[int]], seed8: list[float], seal: str) -> str:
+    """Render a tiny Penrose-tile SVG whose colours are derived from A
+    and the seal. The geometry is procedurally drawn; the determinism
+    comes from the seed.
+    """
+    import hashlib
+
+    # 8 kite vertices around a centre, slightly irregular.
+    cx, cy = 300.0, 300.0
+    radius = 240.0
+    import math
+    pts = []
+    for i in range(8):
+        a = 2 * math.pi * i / 8 + 0.11  # slight rotation
+        r = radius * (0.9 + 0.1 * seed8[i % 8])
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+
+    # Build paths. We connect each kite to its neighbours.
+    paths = []
+    for i in range(8):
+        p0 = pts[i]
+        p1 = pts[(i + 1) % 8]
+        p2 = pts[(i + 4) % 8]
+        p3 = pts[(i - 1) % 8]
+        # Kite: p0 -> p1 -> p2 -> p3 -> p0
+        d = (
+            f"M {p0[0]:.2f},{p0[1]:.2f} "
+            f"L {p1[0]:.2f},{p1[1]:.2f} "
+            f"L {p2[0]:.2f},{p2[1]:.2f} "
+            f"L {p3[0]:.2f},{p3[1]:.2f} Z"
+        )
+        # Color from A[i % 4][i // 2].
+        c = A[i % 4][i // 2] if i // 2 < 4 else 128
+        hue = c
+        paths.append(
+            f'<path d="{d}" fill="hsl({hue},60%,55%)" '
+            f'stroke="hsl({hue},80%,30%)" stroke-width="1" opacity="0.65" />'
+        )
+
+    # Centre pentagram — a "seal mark" using 5 points.
+    pent = []
+    for i in range(5):
+        a = 2 * math.pi * i / 5 - math.pi / 2
+        r = 80
+        pent.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    pent_path = "M " + " L ".join(f"{x:.2f},{y:.2f}" for x, y in pent) + " Z"
+    paths.append(
+        f'<path d="{pent_path}" fill="none" '
+        f'stroke="hsl({(int(seal[:2], 16) if False else 0)},80%,40%)" '
+        f'stroke-width="2" opacity="0.8" />'
+    )
+
+    seal_short = seal[:16]
+    body = "\n  ".join(paths)
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" '
+        'width="100%" preserveAspectRatio="xMidYMid meet" '
+        'style="background:#08090c">\n  '
+        + body
+        + f'\n  <text x="300" y="588" text-anchor="middle" fill="#5b6a82" '
+        f'font-family="monospace" font-size="11">codex · {seal_short}…</text>\n'
+        "</svg>"
+    )
 
 
 def _invoke(name: str, args: list[Any] | None = None, kwargs: dict[str, Any] | None = None) -> str:

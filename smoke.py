@@ -204,6 +204,37 @@ def main() -> int:
         timeline_meta = page.locator("#create-timeline-meta").inner_text()
         print(f"  timeline meta: {timeline_meta!r}")
 
+        # Codex tab (Push 5): open and forge a codex, check all 5 validations.
+        page.click("#tab-codex")
+        page.wait_for_function(
+            "document.querySelector('#codex-status').textContent.includes('valid') || "
+            "document.querySelector('#codex-status').textContent.includes('invalid')",
+            timeout=120000,
+        )
+        codex_status = page.locator("#codex-status").inner_text()
+        codex_seal = page.locator("#codex-seal").inner_text()
+        codex_enc = page.locator("#codex-encrypted").inner_text()
+        print(f"  codex status: {codex_status!r}")
+        assert "valid" in codex_status and "invalid" not in codex_status
+        assert len(codex_seal) == 64
+        assert len(codex_enc) == 64
+        # Penrose SVG rendered.
+        codex_svg_count = page.evaluate(
+            "document.querySelectorAll('#codex-penrose svg path').length"
+        )
+        assert codex_svg_count > 0, f"no penrose paths: {codex_svg_count}"
+        print(f"  codex: seal={codex_seal[:16]}… svg paths={codex_svg_count}")
+
+        # Sharable URL deep links (Push 4.1): auto-run an invocation via ?invocation=
+        page.goto(URL.split("?")[0] + "?invocation=hello:world&tab=awaken")
+        page.wait_for_function(
+            "document.querySelector('#awaken-status').textContent.includes('✓')",
+            timeout=120000,
+        )
+        url_status = page.locator("#awaken-status").inner_text()
+        print(f"  ?invocation= status: {url_status!r}")
+        assert "hello:world" in url_status
+
         browser.close()
     return 0
 
