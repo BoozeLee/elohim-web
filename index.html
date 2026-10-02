@@ -1122,6 +1122,30 @@
       <div id="soul-status" class="meta" style="margin-top:8px; min-height:1.4em;"></div>
       <pre id="soul-output" style="display:none; margin-top:10px; max-height:280px; overflow:auto; font-size:11px;"></pre>
     </div>
+
+    <div class="card" id="vault-card" style="margin-top:18px;">
+      <h2>Soul Vault · hosted identity (opt-in)</h2>
+      <p class="meta" style="margin:0 0 12px 0;">
+        Optional paid hosting. Store a copy of your Soul File on the
+        elohim-vault service so any agent on any framework can load it
+        by pk alone. Local-first is the default — this is purely an
+        additional copy. Free tier: 3 souls, 1 MB each. Indie $9/mo:
+        100 souls, 5 MB. Team $49/mo: 1000 souls, 25 MB.
+      </p>
+      <div class="row" style="gap:8px;">
+        <input id="vault-base" type="text" placeholder="vault base url" value="http://127.0.0.1:8791" style="flex:1;" />
+      </div>
+      <div class="row" style="gap:8px; margin-top:8px;">
+        <input id="vault-target-pk" type="text" placeholder="pk to look up" style="flex:1;" />
+        <button id="vault-lookup" class="secondary">lookup by pk</button>
+      </div>
+      <div class="row" style="gap:8px; margin-top:8px;">
+        <button id="vault-store">store last soul</button>
+        <button id="vault-list" class="secondary">list public</button>
+      </div>
+      <div id="vault-status" class="meta" style="margin-top:8px; min-height:1.4em;"></div>
+      <pre id="vault-output" style="display:none; margin-top:10px; max-height:240px; overflow:auto; font-size:11px;"></pre>
+    </div>
   </section>
 
   <!-- CREATE PANEL -->
@@ -1608,7 +1632,10 @@ import elohim_enhanced.extras
   // explicit `return` is allowed at module level.
   let sealCheckJson;
 try {
-    sealCheckJson = localPyodide.runPython(`bridge._invoke("verify_seal_multi")`);
+    // _invoke is async because vault_call is a coroutine; we use the
+    // synchronous _invoke_sync helper for the boot tripwire (verify_seal_multi
+    // is sync and never returns a coroutine).
+    sealCheckJson = localPyodide.runPython(`bridge._invoke_sync("verify_seal_multi")`);
   } catch (e) {
     boot.fail(`verify_seal_multi threw: ${e.message || e}`);
     return null;
@@ -1654,21 +1681,27 @@ async function ensurePyodide() {
 async function call(name, kwargs = {}) {
   await ensurePyodide();
   if (!pyodide) throw new Error("pyodide failed to initialise");
-  let resultJson;
   try {
-    // Pass kwargs as a JSON string and parse in Python — JS `false`/`null`
-    // are not Python literals, so we cannot embed the dict directly.
+    // _invoke is async (vault_call is a coroutine); use runPythonAsync.
+    // Both async and sync bridge functions return synchronously when
+    // awaited — _invoke always awaits the coroutine internally.
     const kwargsJson = JSON.stringify(kwargs || {});
-    resultJson = pyodide.runPython(
+    const result = await pyodide.runPythonAsync(
       `import json as _e_j\n` +
       `_e_r = bridge._invoke(${JSON.stringify(name)}, [], _e_j.loads(${JSON.stringify(kwargsJson)}))\n` +
       `_e_r`
     );
+    if (typeof result === "string") {
+      try { return JSON.parse(result); } catch { return result; }
+    }
+    return result;
   } catch (e) {
     throw new Error(e.message || String(e));
   }
-  return JSON.parse(resultJson);
 }
+
+// Alias kept for clarity at the call site — `call()` is now always async.
+const callAsync = call;
 
 const elohim = {
   version: () => call("version"),
@@ -1722,6 +1755,45 @@ const elohim = {
   soulVerify: (payload, passphrase) =>
     call("soul_verify", { payload, passphrase: passphrase || null }),
   soulKeygen: () => call("soul_keygen"),
+  // Phase 16 vault: thin HTTP wrapper over the elohim-vault FastAPI
+  // service. Default base is http://127.0.0.1:8791 (local dev).
+  // We route via the browser's native fetch (not Pyodide's bridge) so
+  // the JSON serialization stays in JS-land and we avoid the cross-
+  // stack coroutine dance. mode:'cors' + credentials:'omit' are
+  // explicit because Chromium blocks same-host-different-port fetches
+  // without them.
+  vaultCall: async (method, path, body) => {
+    const base = (document.getElementById("vault-base") || {}).value
+                  || "http://127.0.0.1:8791";
+    const url = base.replace(/\/$/, "") + path;
+    const init = {
+      method,
+      mode: "cors",
+      credentials: "omit",
+      headers: { "Content-Type": "application/json" },
+    };
+    if (body !== null && body !== undefined) {
+      init.body = JSON.stringify(body);
+    }
+    try {
+      const r = await fetch(url, init);
+      const text = await r.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { parsed = { ok: r.ok, raw: text }; }
+      if (!r.ok) {
+        return {
+          ok: false,
+          error: (parsed && (parsed.detail || parsed.error)) || text,
+          status: r.status,
+          method, path,
+        };
+      }
+      return parsed;
+    } catch (e) {
+      return { ok: false, error: `vaultCall failed: ${e.message || e}`,
+               method, path };
+    }
+  },
 };
 
 // Per-call entropy: every interactive bridge call carries a fresh nonce
@@ -2258,6 +2330,81 @@ async function keygenSoul() {
   }
 }
 $("#soul-keygen").addEventListener("click", () => keygenSoul());
+
+// ---------- Vault handlers (Phase 16) ----------
+
+async function vaultStore() {
+  const status = $("#vault-status");
+  const out = $("#vault-output");
+  const base = $("#vault-base").value.trim() || "http://127.0.0.1:8791";
+  // Pull the last soul from localStorage.
+  const blob = localStorage.getItem("elohim.soul.last");
+  if (!blob) {
+    status.innerHTML = '<span class="meta">no soul in localStorage — export first.</span>';
+    return;
+  }
+  let payload;
+  try { payload = JSON.parse(blob); }
+  catch (e) {
+    status.innerHTML = `<span class="error">✗ invalid JSON in elohim.soul.last</span>`;
+    return;
+  }
+  status.innerHTML = '<span class="meta">storing…</span>';
+  const r = await elohim.vaultCall("POST", "/api/vault/store",
+    { payload, is_private: false });
+  if (r && r.ok) {
+    status.innerHTML = `<span class="ok">✓ stored · ${r.agent_name} · ${r.bytes} bytes · entitlement=${r.entitlement}</span>`;
+    out.textContent = JSON.stringify(r, null, 2);
+  } else {
+    status.innerHTML = `<span class="error">✗ ${escapeHtml((r && (r.error || r.detail)) || "store failed")}</span>`;
+  }
+  out.style.display = "block";
+}
+
+async function vaultLookup() {
+  const status = $("#vault-status");
+  const out = $("#vault-output");
+  const base = $("#vault-base").value.trim() || "http://127.0.0.1:8791";
+  const pk = $("#vault-target-pk").value.trim();
+  if (!pk) {
+    toast("type a pk first", "error");
+    return;
+  }
+  status.innerHTML = '<span class="meta">looking up…</span>';
+  const r = await elohim.vaultCall("GET", `/api/vault/lookup/${encodeURIComponent(pk)}`);
+  if (r && r.ok) {
+    status.innerHTML = `<span class="ok">✓ found · ${r.agent_name} · schema=${r.schema} · entitlement=${r.entitlement}</span>`;
+    out.textContent = JSON.stringify(r, null, 2);
+  } else {
+    status.innerHTML = `<span class="error">✗ ${escapeHtml((r && (r.error || r.detail)) || "lookup failed")}</span>`;
+    out.textContent = JSON.stringify(r, null, 2);
+  }
+  out.style.display = "block";
+}
+
+async function vaultList() {
+  const status = $("#vault-status");
+  const out = $("#vault-output");
+  const base = $("#vault-base").value.trim() || "http://127.0.0.1:8791";
+  status.innerHTML = '<span class="meta">listing…</span>';
+  const r = await elohim.vaultCall("GET", "/api/vault/list_public?limit=10");
+  if (r && r.ok) {
+    status.innerHTML = `<span class="ok">✓ ${r.total} soul(s) public</span>`;
+    out.textContent = JSON.stringify(r, null, 2);
+  } else {
+    status.innerHTML = `<span class="error">✗ ${escapeHtml((r && r.error) || "list failed")}</span>`;
+  }
+  out.style.display = "block";
+}
+
+$("#vault-store").addEventListener("click", () => vaultStore());
+$("#vault-lookup").addEventListener("click", () => vaultLookup());
+$("#vault-list").addEventListener("click", () => vaultList());
+
+// Expose vault helpers for the smoke harness.
+elohim.vaultStoreFlow = vaultStore;
+elohim.vaultLookupFlow = vaultLookup;
+elohim.vaultListFlow = vaultList;
 
 // Expose the soul helpers on `window.elohim` for the smoke harness.
 elohim.soulExportFile = exportSoul;

@@ -14,6 +14,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 URL = f"http://127.0.0.1:8780/?nocache={int(time.time())}"
+VAULT_URL = "http://127.0.0.1:8780"   # vault is same-origin as SPA (Phase 16)
 CANONICAL_SEAL = "5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596"
 
 
@@ -665,6 +666,89 @@ def main() -> int:
         names_after = set(t["name"] for t in tools_after["result"]["tools"])
         assert "elohim_soul_keygen" in names_after, f"missing soul_keygen tool: {names_after}"
         print(f"  v0.2 webmcp: 10 tools incl. elohim_soul_keygen ✓")
+
+        # ---- Vault (Phase 16): hosted Soul File round-trip ----
+        # The vault FastAPI service must be running on the same port
+        # as the SPA (8780) so the browser treats it as same-origin.
+        # Phase 16 uses the elohim monorepo's FastAPI server which
+        # serves both the static SPA and the vault routes on 8780.
+        vault_url = VAULT_URL
+        # Set the vault-base input to the smoke URL so vaultCall reads
+        # the right base (the input default is for the standalone vault).
+        page.evaluate(
+            f"const i = document.getElementById('vault-base');"
+            f"if (i) i.value = {_json.dumps(vault_url)};"
+        )
+
+        # (13) vault_call is exposed on window.elohim and reaches the server.
+        tiers = page.evaluate(
+            f"window.elohim.vaultCall('GET', '/api/vault/tiers')"
+        )
+        assert tiers and "tiers" in tiers and "free" in tiers["tiers"], (
+            f"vault tiers unreachable: {tiers}"
+        )
+        assert tiers["canonical_seal"] == CANONICAL_SEAL
+        print(f"  vault tiers: free={tiers['tiers']['free']['count']} souls · "
+              f"indie=${tiers['prices_usd']['indie']}/mo · "
+              f"team=${tiers['prices_usd']['team']}/mo ✓")
+
+        # (14) Store the v0.2 soul we just made, then look it up by pk.
+        # The vault should accept both v0.1 and v0.2 envelopes byte-for-byte.
+        import base64 as _b64
+        # Use the v0.2 envelope directly (it's still in soul_v2 from the
+        # earlier assertions — the localStorage mirror only carries the
+        # last *exported* envelope which is v0.1 in our test flow).
+        store_r = page.evaluate(
+            f"window.elohim.vaultCall('POST', '/api/vault/store', "
+            f"  {{ payload: {_json.dumps(soul_v2['envelope'])}, is_private: false }})"
+        )
+        assert store_r and store_r.get("ok") is True, f"vault store failed: {store_r}"
+        stored_pk = store_r["pk"]
+        print(f"  vault store: {store_r['agent_name']} · pk={stored_pk[:16]}… · "
+              f"{store_r['bytes']} bytes ✓")
+
+        # (15) Look up by pk returns byte-for-byte the same envelope.
+        # Browsers decode `%2F` back to `/` in the path before sending,
+        # which would split the URL across path segments and 404. We
+        # replace `=` with `%3D` (the only special char in base64) and
+        # let the `/`s stay literal — FastAPI captures the whole segment.
+        safe_pk = stored_pk.replace("=", "%3D")
+        lookup_r = page.evaluate(
+            f"window.elohim.vaultCall('GET', '/api/vault/lookup/' + "
+            f"  {_json.dumps(safe_pk)})"
+        )
+        assert lookup_r and lookup_r.get("ok") is True, f"vault lookup failed: {lookup_r}"
+        # Byte-for-byte: the signature.pk matches and the schema matches.
+        assert lookup_r["payload"]["signature"]["pk"] == stored_pk
+        assert lookup_r["payload"]["schema"] == "elohim-soul/v2"
+        print(f"  vault lookup: byte-for-byte match · schema={lookup_r['payload']['schema']} ✓")
+
+        # (16) Public list surfaces the stored soul.
+        list_r = page.evaluate(
+            "window.elohim.vaultCall('GET', '/api/vault/list_public?limit=50')"
+        )
+        assert list_r and list_r.get("ok") is True
+        pks = [it["pk"] for it in list_r["items"]]
+        assert stored_pk in pks, f"stored soul not in public list: {pks}"
+        print(f"  vault list_public: {list_r['total']} soul(s), ours is in there ✓")
+
+        # (17) Bad-schema rejection: 400 with a clear error.
+        bad_envelope = {
+            "schema": "elohim-soul/v999",
+            "agent_name": "x",
+            "last_export_ts": 0,
+            "signature": {"alg": "ed25519", "pk": "fake", "sig": "fake"},
+        }
+        bad_r = page.evaluate(
+            f"window.elohim.vaultCall('POST', '/api/vault/store', "
+            f"  {{ payload: {_json.dumps(bad_envelope)}, is_private: false }})"
+        )
+        assert bad_r and bad_r.get("ok") is False, f"bad schema accepted: {bad_r}"
+        assert "unsupported schema" in (bad_r.get("error") or "").lower(), (
+            f"unclear error: {bad_r}"
+        )
+        print(f"  vault bad-schema rejection: {bad_r['status']} · "
+              f"{bad_r['error'][:50]}… ✓")
 
         browser.close()
     return 0

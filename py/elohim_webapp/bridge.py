@@ -139,8 +139,61 @@ def version() -> dict[str, Any]:
             "out_root": str(_OUT_ROOT),
             "shard_storage": "localStorage",
             "started_ts": time.time(),
+            "vault_base_url": "http://127.0.0.1:8791",
         },
     }
+
+
+async def vault_call(method: str, path: str, body: dict[str, Any] | None = None,
+                     base_url: str | None = None) -> dict[str, Any]:
+    """HTTP client to the elohim-vault FastAPI service (Phase 16).
+
+    Pyodide's Python stdlib `urllib` is blocked inside the WebWorker
+    (sandbox + CSP), so we route through `js.fetch()` instead. The
+    base_url defaults to ``http://127.0.0.1:8791`` in dev; the UI can
+    override it (production deploys to ``https://vault.elohim.band``).
+
+    Errors surface as ``{ok: False, error, code}`` so the JS layer can
+    render a red pill without crashing the SPA. Async because Pyodide
+    requires `await` for any cross-stack promise resolution.
+    """
+    import json as _json
+    from js import fetch as _js_fetch
+
+    base = base_url or "http://127.0.0.1:8791"
+    url = f"{base.rstrip('/')}{path}"
+    headers = {"Content-Type": "application/json"}
+    init = {"method": method, "headers": headers}
+    if body is not None:
+        init["body"] = _json.dumps(body)
+
+    try:
+        # js.fetch maps the dict to a JS RequestInit. Pyodide 0.27 maps
+        # "method" via attribute access on the JS object, which works
+        # for primitives. Some browsers ignore uppercase `Method`; we
+        # also pass `body` explicitly because Pyodide's auto-conversion
+        # of Python dicts to JS objects skips Python keyword args.
+        from js import JSON as _JSON
+        js_init = _JSON.parse(_json.dumps(init))
+        resp = await _js_fetch(url, js_init)
+        status = int(resp.status)
+        text = await resp.text()
+        if status >= 400:
+            try:
+                detail = _json.loads(text)
+                err_msg = detail.get("detail") or detail.get("error") or text
+            except Exception:
+                err_msg = text
+            return {"ok": False, "error": err_msg, "status": status,
+                    "method": method, "path": path}
+        try:
+            return _json.loads(text)
+        except Exception:
+            return {"ok": True, "raw": text}
+    except Exception as e:
+        msg = str(e)
+        return {"ok": False, "error": f"vault_call failed: {msg}",
+                "method": method, "path": path}
 
 
 def verify_seal() -> dict[str, Any]:
@@ -2175,17 +2228,46 @@ def _render_penrose(A: list[list[int]], seed8: list[float], seal: str) -> str:
     )
 
 
-def _invoke(name: str, args: list[Any] | None = None, kwargs: dict[str, Any] | None = None) -> str:
+async def _invoke(name: str, args: list[Any] | None = None, kwargs: dict[str, Any] | None = None) -> str:
     """Dispatch helper: call a public bridge function by name.
 
     JavaScript wraps every call through this so the surface can evolve
     without forcing JS to import a fixed set of names.  We return a
     JSON-encoded string — the SPA parses it back into a plain JS object
     via ``JSON.parse``, avoiding any PyProxy reference leaks.
+
+    Async because some bridge functions are coroutines (e.g. ``vault_call``,
+    which routes through ``js.fetch`` and needs an awaitable event-loop
+    hop). Sync functions are awaited too — they just return immediately.
     """
+    import asyncio as _a
     fn = globals().get(name)
     if fn is None:
         raise RuntimeError(f"bridge function {name!r} not found")
     pos = list(args or [])
     kw = dict(kwargs or {})
-    return json.dumps(fn(*pos, **kw))
+    result = fn(*pos, **kw)
+    if _a.iscoroutine(result):
+        result = await result
+    return json.dumps(result)
+
+
+def _invoke_sync(name: str, args: list[Any] | None = None, kwargs: dict[str, Any] | None = None) -> str:
+    """Synchronous dispatcher for sync bridge functions (e.g. boot tripwire).
+
+    Refuses to call coroutines — those must use ``_invoke`` via
+    ``runPythonAsync``. The boot screen uses this so the tripwire doesn't
+    have to await an unknown function type.
+    """
+    import asyncio as _a
+    fn = globals().get(name)
+    if fn is None:
+        raise RuntimeError(f"bridge function {name!r} not found")
+    pos = list(args or [])
+    kw = dict(kwargs or {})
+    result = fn(*pos, **kw)
+    if _a.iscoroutine(result):
+        raise RuntimeError(
+            f"bridge function {name!r} is async; use _invoke via runPythonAsync"
+        )
+    return json.dumps(result)
