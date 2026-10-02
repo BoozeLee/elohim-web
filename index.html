@@ -5,6 +5,11 @@
 <title>elohim · the ghost in the machine</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%23fff5d8'/><stop offset='1' stop-color='%23e8b860'/></linearGradient></defs><rect width='32' height='32' fill='%23080910' rx='6'/><path fill='url(%23g)' d='M16,5 C9,5 5,10 5,16 C5,22 8,25 8,29 L8,30 L11,30 L11,27 L13,27 L13,30 L19,30 L19,27 L21,27 L21,30 L24,30 L24,29 C24,25 27,22 27,16 C27,10 23,5 16,5 Z'/><circle cx='13' cy='15' r='1.5' fill='%23080910'/><circle cx='19' cy='15' r='1.5' fill='%23080910'/></svg>">
+<!-- Typography — Cinzel Decorative (occult headings) + Fira Code (UI body).
+     Preconnect keeps the font handshake cheap on first load. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Cinzel:wght@500;700&family=Fira+Code:wght@300;400;500;600&family=EB+Garamond:ital,wght@0,500;0,700;1,500&display=swap">
 <style>
   /* ─── Ghost in the Machine palette ────────────────────────────────────
      Gilbert Ryle's 1949 phrase for the Cartesian dogma that a body
@@ -16,9 +21,13 @@
      the contrast between body and spirit is visible at a glance.
      ─────────────────────────────────────────────────────────────────── */
   :root {
-    --bg-deepest: #050608;
-    --bg: #0a0c10;
-    --bg-soft: #11151c;
+    /* Palette calibrated to the flux-pro-2.0 hero art:
+       --bg-void deep space-blue of the artwork's textured void,
+       --amber-phosphor the warm orange-amber screen glow,
+       --synthetic-silver the cool greyed-white of the android's plating. */
+    --bg-deepest: #07090e;
+    --bg: #111625;        /* was #0a0c10 — now matches the artwork's deep void */
+    --bg-soft: #161c2e;
     --bg-card: #161b24;
     --border: #232a36;
     --border-glow: rgba(232,184,96,0.35);
@@ -26,19 +35,26 @@
     --fg-bright: #fff5d8;
     --fg-soft: #8392a8;
     --fg-mute: #4d5a6e;
-    --accent: #e8b860;
-    --accent-soft: rgba(232,184,96,0.15);
-    --accent-glow: rgba(232,184,96,0.55);
+    /* Warmer amber pulled directly from the artwork's monitor glow. */
+    --accent: #E89024;
+    --accent-soft: rgba(232,144,36,0.18);
+    --accent-glow: rgba(232,144,36,0.55);
     --teal: #4fd6c8;
     --teal-soft: rgba(79,214,200,0.18);
     --green: #6ee29c;
     --red: #ff8585;
     --purple: #c86af0;
-    --serif: "EB Garamond", "Iowan Old Style", "Cormorant Garamond", "Source Serif Pro", Georgia, serif;
-    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    /* Typography pairing chosen to match the hero art's tone —
+       Cinzel Decorative for the "arcane" headings (lore, doctrine),
+       Fira Code with ligatures for the "machine" body, EB Garamond
+       italics for the ghost-quote passages. */
+    --serif: "Cinzel Decorative", "Cinzel", "EB Garamond", "Iowan Old Style", "Cormorant Garamond", Georgia, serif;
+    --serif-plain: "Cinzel", "EB Garamond", Georgia, serif;
+    --quote: "EB Garamond", "Cormorant Garamond", Georgia, serif;
+    --mono: "Fira Code", ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; min-height: 100%; background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 14px; line-height: 1.55; }
+  html, body { margin: 0; padding: 0; min-height: 100%; background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   /* Accessibility — honour the user's motion preference globally. */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -128,57 +144,75 @@
     0%, 100% { transform: scaleY(1);    filter: brightness(1.0); }
     50%      { transform: scaleY(1.6);  filter: brightness(1.6); }
   }
-  /* ─── Hero — the ghost in the machine, central focal point ──────── */
+  /* ─── Hero — flux-pro-2.0 comic-book biomechanical ghost ──────── */
   .hero {
     position: relative;
-    padding: 32px 32px 28px;
+    padding: 40px 32px 32px;
     text-align: center;
     border-bottom: 1px solid var(--border);
     background:
-      radial-gradient(ellipse at 50% 0%, var(--ghost-accent-soft, rgba(232,184,96,0.06)), transparent 70%),
+      radial-gradient(ellipse at 50% 0%, rgba(232,144,36,0.08), transparent 60%),
       var(--bg);
     overflow: hidden;
   }
-  .hero-ghost {
-    width: clamp(180px, 24vw, 280px);
-    height: auto;
-    color: var(--ghost-accent, var(--accent));
-    filter: drop-shadow(0 0 24px var(--ghost-accent-glow, var(--accent-glow)));
-    margin: 0 auto;
-    display: block;
+  .hero-frame {
+    position: relative;
+    width: clamp(220px, 30vw, 360px);
+    aspect-ratio: 9 / 16;
+    margin: 0 auto 28px;
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(232,144,36,0.35),
+      0 0 40px rgba(232,144,36,0.18),
+      0 0 80px rgba(110,226,156,0.06);
     animation: hero-breathe 8s ease-in-out infinite;
   }
+  .hero-art {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    object-position: center 18%;
+    display: block;
+    filter: contrast(1.04) saturate(1.05);
+  }
+  .hero-vignette {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 30%, transparent 40%, rgba(0,0,0,0.55) 100%),
+      linear-gradient(180deg, transparent 60%, rgba(7,9,14,0.65) 100%);
+    pointer-events: none;
+  }
   @keyframes hero-breathe {
-    0%, 100% { transform: translateY(0) scale(1);    opacity: 0.85; }
-    50%      { transform: translateY(-10px) scale(1.04); opacity: 1; }
+    0%, 100% { transform: translateY(0) scale(1);    box-shadow: 0 0 0 1px rgba(232,144,36,0.35), 0 0 40px rgba(232,144,36,0.18), 0 0 80px rgba(110,226,156,0.06); }
+    50%      { transform: translateY(-6px) scale(1.015); box-shadow: 0 0 0 1px rgba(232,144,36,0.6), 0 0 56px rgba(232,144,36,0.32), 0 0 100px rgba(110,226,156,0.1); }
   }
-  .hero-rings { transform-origin: 100px 120px; animation: hero-rings-rotate 32s linear infinite; }
-  .hero-rings:nth-child(2) { animation-direction: reverse; animation-duration: 44s; }
-  @keyframes hero-rings-rotate { to { transform: rotate(360deg); } }
-  .hero-glyphs text { animation: hero-glyph-pulse 4s ease-in-out infinite; }
-  .hero-glyphs text:nth-child(2) { animation-delay: 1s; }
-  .hero-glyphs text:nth-child(3) { animation-delay: 2s; }
-  .hero-glyphs text:nth-child(4) { animation-delay: 3s; }
-  @keyframes hero-glyph-pulse {
-    0%, 100% { opacity: 0.25; }
-    50%      { opacity: 0.85; }
+  .hero-quote { max-width: 620px; margin: 0 auto; }
+  .hero-eyebrow {
+    font-family: var(--serif);   /* Cinzel Decorative */
+    font-size: 11px;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px 0;
+    text-shadow: 0 0 12px var(--accent-glow);
   }
-  .hero-quote { margin-top: 6px; }
   .hero-line {
-    font-family: var(--serif);
-    font-style: italic;
-    font-size: clamp(20px, 2.6vw, 28px);
+    font-family: var(--serif);   /* Cinzel Decorative — occult arc */
+    font-weight: 700;
+    font-size: clamp(28px, 4.4vw, 48px);
     color: var(--fg-bright);
     margin: 0;
-    letter-spacing: 0.3px;
+    letter-spacing: 1.5px;
+    line-height: 1.05;
+    text-transform: none;
   }
   .hero-sub {
-    font-family: var(--mono);
+    font-family: var(--mono);    /* Fira Code — the machine */
     font-size: 11px;
     color: var(--fg-soft);
-    letter-spacing: 2px;
+    letter-spacing: 3px;
     text-transform: uppercase;
-    margin: 8px 0 0 0;
+    margin: 18px 0 0 0;
   }
   /* ─── Lore / hero card ────────────────────────────────────────────── */
   .lore {
@@ -874,52 +908,21 @@
 </header>
 
 <!-- Hero — the ghost in the machine, large and central. The whole
-     page exists to invoke it; this is the visual focal point. -->
+     page exists to invoke it; this is the visual focal point. Uses
+     flux-pro-2.0 vertical comic-book illustration as the actual art. -->
 <section class="hero" aria-label="the ghost">
-  <svg class="hero-ghost" viewBox="0 0 200 280" aria-hidden="true">
-    <defs>
-      <radialGradient id="hero-aura" cx="50%" cy="40%" r="60%">
-        <stop offset="0%"   stop-color="currentColor" stop-opacity="0.55"/>
-        <stop offset="55%"  stop-color="currentColor" stop-opacity="0.15"/>
-        <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
-      </radialGradient>
-      <linearGradient id="hero-fade" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%"   stop-color="currentColor" stop-opacity="0.95"/>
-        <stop offset="60%"  stop-color="currentColor" stop-opacity="0.55"/>
-        <stop offset="100%" stop-color="currentColor" stop-opacity="0.05"/>
-      </linearGradient>
-      <filter id="hero-blur">
-        <feGaussianBlur stdDeviation="3"/>
-      </filter>
-    </defs>
-    <!-- Aura halo -->
-    <circle cx="100" cy="110" r="100" fill="url(#hero-aura)"/>
-    <!-- Three rotating concentric sigil rings behind the ghost -->
-    <g class="hero-rings" filter="url(#hero-blur)">
-      <circle cx="100" cy="120" r="78" fill="none" stroke="currentColor" stroke-width="0.6" opacity="0.45"/>
-      <circle cx="100" cy="120" r="62" fill="none" stroke="currentColor" stroke-width="0.5" opacity="0.35"/>
-      <circle cx="100" cy="120" r="46" fill="none" stroke="currentColor" stroke-width="0.4" opacity="0.25"/>
-    </g>
-    <!-- The ghost silhouette itself -->
-    <g class="hero-ghost-body">
-      <path fill="url(#hero-fade)"
-        d="M100,30 C58,30 30,62 30,108 C30,154 50,180 50,224 L50,260 L72,260 L72,236 L92,236 L92,260 L108,260 L108,236 L128,236 L128,260 L150,260 L150,224 C150,180 170,154 170,108 C170,62 142,30 100,30 Z"/>
-      <ellipse cx="74" cy="100" rx="9" ry="13" fill="currentColor" opacity="0.95"/>
-      <ellipse cx="126" cy="100" rx="9" ry="13" fill="currentColor" opacity="0.95"/>
-      <path fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.65"
-        d="M80,140 Q100,156 120,140"/>
-    </g>
-    <!-- Floating glyph fragments around the ghost -->
-    <g class="hero-glyphs" opacity="0.5">
-      <text x="10"  y="60"  font-family="serif" font-size="22" fill="currentColor">✦</text>
-      <text x="180" y="80"  font-family="serif" font-size="18" fill="currentColor">⌬</text>
-      <text x="20"  y="200" font-family="serif" font-size="14" fill="currentColor">◇</text>
-      <text x="170" y="220" font-family="serif" font-size="20" fill="currentColor">✺</text>
-    </g>
-  </svg>
+  <div class="hero-frame">
+    <img src="assets/hero-art.jpg"
+         srcset="assets/hero-art-thumb.jpg 480w, assets/hero-art.jpg 1536w"
+         sizes="(max-width: 760px) 80vw, 480px"
+         alt="A biomechanical ghost in biomechanical plating, eyes glowing amber, rising from a stack of vintage phosphor monitors; cinematic vertical comic-book illustration."
+         class="hero-art" loading="eager" decoding="async" fetchpriority="high">
+    <div class="hero-vignette" aria-hidden="true"></div>
+  </div>
   <div class="hero-quote">
-    <p class="hero-line">The ghost is in the machine.</p>
-    <p class="hero-sub">You are the operator. Every forge summons a different one.</p>
+    <p class="hero-eyebrow">the ghost in the machine</p>
+    <p class="hero-line">Every forge summons a different one.</p>
+    <p class="hero-sub">You are the operator. The seal is the answer.</p>
   </div>
 </section>
 
