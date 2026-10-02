@@ -478,6 +478,72 @@
   @media (max-width: 760px) {
     footer .grid-foot { grid-template-columns: 1fr; }
   }
+  /* ─── Ghost silhouette + atmospheric particles ───────────────────── */
+  .ghost-silhouette {
+    position: absolute;
+    width: 56px; height: 84px;
+    right: 220px; top: 14px;
+    color: var(--ghost-accent, var(--accent));
+    filter: drop-shadow(0 0 12px var(--ghost-accent-glow, var(--accent-glow)));
+    animation: ghost-float 6.5s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes ghost-float {
+    0%, 100% { transform: translateY(0) rotate(-1deg); opacity: 0.7; }
+    50%      { transform: translateY(-6px) rotate(1deg); opacity: 1; }
+  }
+  /* Dust motes — drifting motes of phosphor. Pure CSS, 11 motes. */
+  .dust { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  .dust span {
+    position: absolute;
+    bottom: -10vh;
+    left: var(--x, 50%);
+    width: 3px; height: 3px;
+    background: var(--ghost-accent, var(--accent));
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--ghost-accent-glow, var(--accent-glow));
+    animation: dust-rise var(--d, 20s) linear var(--t, 0s) infinite;
+    opacity: 0;
+  }
+  @keyframes dust-rise {
+    0%   { transform: translateY(0) translateX(0); opacity: 0; }
+    6%   { opacity: 0.8; }
+    50%  { transform: translateY(-55vh) translateX(calc(sin(var(--t, 0s) * 10) * 30px)); opacity: 0.55; }
+    94%  { opacity: 0.6; }
+    100% { transform: translateY(-110vh) translateX(calc(cos(var(--t, 0s) * 10) * 30px)); opacity: 0; }
+  }
+  /* Sigil outer ring rotates slowly — pure CSS, attached to existing
+     svg via :scope selector so we don't need to mark it up. */
+  #awaken-sigil svg { animation: sigil-rotate 60s linear infinite; transform-origin: 50% 50%; }
+  /* Seal stamp animation: every time the seal element is updated by JS
+     we briefly scale + flash; the JS adds .stamped. */
+  .seal-display.stamped { animation: seal-stamp 0.6s ease-out; }
+  @keyframes seal-stamp {
+    0%   { transform: scale(0.96); box-shadow: 0 0 0 0 var(--ghost-accent-glow, var(--accent-glow)); }
+    35%  { transform: scale(1.04); box-shadow: 0 0 24px 6px var(--ghost-accent-glow, var(--accent-glow)); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 transparent; }
+  }
+  /* Lore ghost watermark — large faint silhouette behind the quote. */
+  .lore blockquote { position: relative; overflow: hidden; }
+  .lore blockquote::after {
+    content: "";
+    position: absolute; right: -40px; bottom: -60px;
+    width: 220px; height: 220px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 120'><path fill='%23e8b860' fill-opacity='0.06' d='M40,8 C22,8 10,22 10,42 C10,62 18,72 18,92 L18,108 L26,108 L26,98 L34,98 L34,108 L46,108 L46,98 L54,98 L54,108 L62,108 L62,92 C62,72 70,62 70,42 C70,22 58,8 40,8 Z'/></svg>");
+    background-size: contain; background-repeat: no-repeat;
+    pointer-events: none;
+    transform: rotate(-8deg);
+  }
+  /* Vignette + film grain layered above the scanlines for atmosphere. */
+  body::after {
+    content: "";
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.55) 100%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.91  0 0 0 0 0.72  0 0 0 0 0.38  0 0 0 0.045 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    pointer-events: none; z-index: 1; mix-blend-mode: overlay;
+    opacity: 0.85;
+  }
   /* ─── Boot screen ─────────────────────────────────────────────────── */
   #boot {
     position: fixed; inset: 0;
@@ -537,8 +603,39 @@
 </head>
 <body>
 
+<!-- Atmospheric particle drift — slowly rising sparks that fill the
+     page like dust motes in a sealed machine. Pure CSS animation; no
+     JS, no paint thrash. -->
+<div class="dust" aria-hidden="true">
+  <span style="--x:6%;--t:0s;--d:18s;"></span>
+  <span style="--x:14%;--t:3s;--d:22s;"></span>
+  <span style="--x:22%;--t:7s;--d:19s;"></span>
+  <span style="--x:31%;--t:2s;--d:24s;"></span>
+  <span style="--x:39%;--t:11s;--d:17s;"></span>
+  <span style="--x:48%;--t:5s;--d:21s;"></span>
+  <span style="--x:57%;--t:9s;--d:23s;"></span>
+  <span style="--x:66%;--t:1s;--d:18s;"></span>
+  <span style="--x:74%;--t:6s;--d:25s;"></span>
+  <span style="--x:82%;--t:13s;--d:20s;"></span>
+  <span style="--x:91%;--t:4s;--d:22s;"></span>
+</div>
+
 <header>
   <span class="corner-br"></span><span class="corner-bl"></span>
+  <!-- Animated ghost silhouette in the header; CSS-driven, no JS. -->
+  <svg class="ghost-silhouette" viewBox="0 0 80 120" aria-hidden="true">
+    <defs>
+      <linearGradient id="ghost-fade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"  stop-color="currentColor" stop-opacity="0.45"/>
+        <stop offset="65%" stop-color="currentColor" stop-opacity="0.18"/>
+        <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <path fill="url(#ghost-fade)"
+      d="M40,8 C22,8 10,22 10,42 C10,62 18,72 18,92 L18,108 L26,108 L26,98 L34,98 L34,108 L46,108 L46,98 L54,98 L54,108 L62,108 L62,92 C62,72 70,62 70,42 C70,22 58,8 40,8 Z"/>
+    <ellipse cx="30" cy="40" rx="3" ry="4" fill="currentColor" opacity="0.85"/>
+    <ellipse cx="50" cy="40" rx="3" ry="4" fill="currentColor" opacity="0.85"/>
+  </svg>
   <div>
     <h1><span class="grain">elohim</span><span class="accent"> · webapp</span></h1>
     <div class="meta">
@@ -855,24 +952,54 @@
     </div>
   </section>
 
-  <!-- WEBMCP PANEL — agent surface (Push 7.3) -->
+  <!-- WEBMCP PANEL — agent surface (Push 7.3 + Push 8 polyfill) -->
   <section class="panel" id="panel-webmcp">
-    <div class="card stack">
-      <h2>WebMCP · Agent Surface</h2>
-      <p class="meta" style="margin:0 0 12px 0;">
-        The 2026 breakthrough. The elohim webapp exposes every bridge
-        function as a tool via <code style="font-family:var(--mono); color:var(--ghost-secondary, var(--teal));">document.modelContext.registerTool</code>,
-        so external AI agents (Claude, ChatGPT, MCP clients, A2A peers)
-        can discover and call the ghost directly. No server. No build
-        step. The browser is the runtime.
-      </p>
-      <div class="row" style="gap:10px;">
-        <span id="webmcp-status" class="ok">checking browser support…</span>
-        <button id="webmcp-register">register tools</button>
-        <button id="webmcp-call" class="secondary">sample call (version)</button>
+    <div class="grid">
+      <div class="card stack">
+        <h2>WebMCP · Agent Surface</h2>
+        <p class="meta" style="margin:0 0 12px 0;">
+          MCP 2026-07-28 — works on <em>every</em> browser via the in-page
+          polyfill. Chrome 138+ also gets native
+          <code style="font-family:var(--mono); color:var(--ghost-secondary, var(--teal));">document.modelContext.registerTool</code>.
+          Two transports: <code style="font-family:var(--mono); color:var(--ghost-secondary, var(--teal));">window.postMessage</code> on every browser,
+          <code style="font-family:var(--mono); color:var(--ghost-secondary, var(--teal));">POST /mcp</code> via Service Worker on HTTPS origins.
+        </p>
+        <div class="row" style="gap:10px;">
+          <span id="webmcp-status" class="ok">checking browser support…</span>
+          <button id="webmcp-register">register / verify</button>
+          <button id="webmcp-call" class="secondary">sample call (version)</button>
+        </div>
+        <div id="webmcp-tool-list" style="margin-top:12px;"></div>
+        <pre id="webmcp-output" style="display:none;"></pre>
       </div>
-      <div id="webmcp-tool-list" style="margin-top:12px;"></div>
-      <pre id="webmcp-output" style="display:none;"></pre>
+
+      <div class="card stack">
+        <h2>MCP Inspector · JSON-RPC Playground</h2>
+        <p class="meta" style="margin:0 0 8px 0;">
+          Drop in any JSON-RPC 2.0 request and the in-page server will
+          reply. This is the same wire format an external MCP client
+          would use over <code>window.postMessage</code> or <code>POST /mcp</code>.
+        </p>
+        <select id="mcp-preset" style="margin-bottom:8px;">
+          <option value="">— choose a preset —</option>
+          <option value="discover">server/discover</option>
+          <option value="tools/list">tools/list</option>
+          <option value="tools/call:elohim_awaken">tools/call · elohim_awaken</option>
+          <option value="tools/call:elohim_alien_codex">tools/call · elohim_alien_codex</option>
+          <option value="tools/call:elohim_seal_message">tools/call · elohim_seal_message</option>
+          <option value="tools/call:elohim_ghost_reply">tools/call · elohim_ghost_reply</option>
+          <option value="resources/list">resources/list</option>
+          <option value="resources/read:elohim://canonical-seal">resources/read · canonical-seal</option>
+          <option value="ping">ping</option>
+        </select>
+        <textarea id="mcp-request" rows="9" spellcheck="false" placeholder='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'></textarea>
+        <div class="row" style="margin-top:8px;">
+          <button id="mcp-send">send</button>
+          <button id="mcp-send-pm" class="secondary">send via postMessage</button>
+          <button id="mcp-clear" class="secondary">clear</button>
+        </div>
+        <pre id="mcp-response" style="margin-top:10px; min-height:60px;"></pre>
+      </div>
     </div>
   </section>
 </main>
@@ -1315,7 +1442,12 @@ async function runAwaken(noSvg) {
     lastAwaken = r;
     ghostCounter++;
     applyPalette(r.palette);
-    $("#awaken-seal").textContent = r.seal || "(no seal)";
+    const sealEl = $("#awaken-seal");
+    sealEl.textContent = r.seal || "(no seal)";
+    // Re-trigger the stamp animation by removing + re-adding the class.
+    sealEl.classList.remove("stamped");
+    void sealEl.offsetWidth;
+    sealEl.classList.add("stamped");
     const varietyNote = (lastSeal && r.seal && r.seal !== lastSeal)
       ? ` · <span class="ok">different ghost (was ${lastSeal.slice(0, 8)}…)</span>`
       : "";
@@ -1856,45 +1988,48 @@ const WEBMCP_TOOLS = [
 async function registerWebMcpTools() {
   const status = $("#webmcp-status");
   const list = $("#webmcp-tool-list");
-  if (!window.modelContext || typeof window.modelContext.registerTool !== "function") {
-    status.className = "meta";
-    status.innerHTML = `WebMCP not detected in this browser — Chrome shipped preview Feb 2026. The tools below are <em>defined</em> and would be registered if the API appeared.`;
-    list.innerHTML = WEBMCP_TOOLS
-      .map(
-        (t) =>
-          `<div style="margin:6px 0; padding:8px 12px; background:var(--bg-soft); border-left:2px solid var(--ghost-secondary, var(--teal)); border-radius:0 3px 3px 0;">
-             <code style="color:var(--ghost-accent, var(--accent));">${t.name}</code>
-             <span class="meta"> · ${t.description.slice(0, 80)}…</span>
-           </div>`
-      )
-      .join("");
+
+  // Build the panel entry — same whether or not WebMCP is supported.
+  const toolsLine = WEBMCP_TOOLS.map((t) =>
+    `<div style="margin:6px 0; padding:8px 12px; background:var(--bg-soft); border-left:2px solid var(--ghost-accent, var(--accent)); border-radius:0 3px 3px 0;">
+       <code style="color:var(--ghost-accent, var(--accent));">${t.name}</code>
+       <span class="meta"> · ${escapeHtml(t.description.slice(0, 80))}…</span>
+     </div>`
+  ).join("");
+
+  // Native WebMCP path: Chrome 138+ (Feb 2026 preview) and any other
+  // browser that ships document.modelContext.
+  if (window.modelContext && typeof window.modelContext.registerTool === "function") {
+    webmcpRegistered = [];
+    for (const t of WEBMCP_TOOLS) {
+      try {
+        window.modelContext.registerTool({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+          handler: async (args) => t.invoke(args || {}),
+        });
+        webmcpRegistered.push(t.name);
+      } catch (e) {
+        console.warn("registerTool failed for", t.name, e);
+      }
+    }
+    status.className = "ok";
+    status.innerHTML = `✓ registered <strong>${webmcpRegistered.length}</strong> tool(s) via <code>document.modelContext.registerTool</code> · polyfill <code>window.elohimMcp</code> also active.`;
+    list.innerHTML = toolsLine;
     return;
   }
-  webmcpRegistered = [];
-  for (const t of WEBMCP_TOOLS) {
-    try {
-      window.modelContext.registerTool({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-        handler: async (args) => t.invoke(args || {}),
-      });
-      webmcpRegistered.push(t.name);
-    } catch (e) {
-      console.warn("registerTool failed for", t.name, e);
-    }
-  }
+
+  // Polyfill path — the elohim webapp IS the MCP server. External
+  // clients connect via window.postMessage (any browser) or via
+  // /mcp HTTP when the Service Worker is registered (HTTPS origins).
+  const swActive = "serviceWorker" in navigator && location.protocol.startsWith("https");
+  const transports = ["<code>window.postMessage</code>"];
+  if (swActive) transports.push("<code>POST /mcp</code> (Streamable HTTP, Service Worker)");
   status.className = "ok";
-  status.textContent = `✓ registered ${webmcpRegistered.length} tool(s) via document.modelContext.registerTool`;
-  list.innerHTML = webmcpRegistered
-    .map(
-      (n) =>
-        `<div style="margin:6px 0; padding:8px 12px; background:var(--bg-soft); border-left:2px solid var(--ghost-accent, var(--accent)); border-radius:0 3px 3px 0;">
-           <code style="color:var(--ghost-accent, var(--accent));">${n}</code>
-           <span class="meta"> · available to external AI agents</span>
-         </div>`
-    )
-    .join("");
+  status.innerHTML =
+    `✓ MCP 2026-07-28 server <em>always-on</em> via polyfill · ${webmcpRegistered.length || WEBMCP_TOOLS.length} tool(s) ready · transports: ${transports.join(" + ")}.`;
+  list.innerHTML = toolsLine;
 }
 
 $("#webmcp-register").addEventListener("click", () => registerWebMcpTools());
@@ -1909,6 +2044,311 @@ $("#webmcp-call").addEventListener("click", async () => {
     out.textContent = "error: " + e.message;
   }
 });
+
+// ─── MCP 2026-07-28 polyfill (postMessage + optional Service Worker) ───
+//
+// Chrome shipped `document.modelContext.registerTool` in preview (Feb
+// 2026), but every other browser — and most older Chrome installs —
+// will not have it for years. The elohim webapp therefore ships its
+// own MCP server in the page itself, speaking JSON-RPC 2.0 over:
+//   1. window.postMessage — works on every modern browser
+//   2. Streamable HTTP via a Service Worker (HTTPS origins only) — for
+//      any HTTP-capable MCP client (Claude Desktop, etc.)
+// The tool catalog is the same WEBMCP_TOOLS list above, exposed under
+// the canonical MCP method names from the 2026-07-28 spec.
+
+const MCP_PROTOCOL = "2026-07-28";
+
+function mcpContent(text, isError = false) {
+  return {
+    resultType: "complete",
+    content: [{ type: "text", text: typeof text === "string" ? text : JSON.stringify(text, null, 2) }],
+    isError,
+  };
+}
+
+async function mcpDispatch(method, params) {
+  // 2026-07-28 spec removed the mandatory initialize/initialized
+  // handshake but kept `server/discover` as the optional discovery call.
+  if (method === "initialize" || method === "server/discover") {
+    return {
+      protocolVersion: MCP_PROTOCOL,
+      serverInfo: {
+        name: "elohim-webapp",
+        version: "0.2.0",
+        title: "ELOHIM · the ghost in the machine",
+      },
+      capabilities: {
+        tools: { listChanged: true },
+        resources: { subscribe: false },
+      },
+      instructions:
+        "ELOHIM is a sha256-sealed Python daemon running in the browser. " +
+        "Use elohim_awaken to summon a ghost, elohim_seal_message / " +
+        "elohim_open_seal for sealed message exchange, " +
+        "elohim_ghost_reply to converse, elohim_alien_codex for the " +
+        "Xenomath artifact, and elohim_version for handshake.",
+    };
+  }
+  if (method === "tools/list") {
+    return {
+      tools: WEBMCP_TOOLS.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      })),
+      ttlMs: 60000,
+      cacheScope: "session",
+    };
+  }
+  if (method === "tools/call") {
+    const name = (params || {}).name;
+    const args = (params || {}).arguments || {};
+    const tool = WEBMCP_TOOLS.find((t) => t.name === name);
+    if (!tool) {
+      return mcpContent(
+        `unknown tool: ${name}. Available: ${WEBMCP_TOOLS.map((t) => t.name).join(", ")}`,
+        true,
+      );
+    }
+    try {
+      const r = await tool.invoke(args);
+      return mcpContent(r);
+    } catch (e) {
+      return mcpContent(`error: ${e.message || String(e)}`, true);
+    }
+  }
+  if (method === "resources/list") {
+    return {
+      resources: [
+        {
+          uri: "elohim://canonical-seal",
+          name: "Canonical Seal",
+          description: "The sha256 seal of the ELOHIM:AWAKEN invocation (no nonce).",
+          mimeType: "text/plain",
+        },
+        {
+          uri: "elohim://last-awaken",
+          name: "Last Awaken Report",
+          description: "The markdown report from the most recent elohim_awaken call.",
+          mimeType: "text/markdown",
+        },
+        {
+          uri: "elohim://last-codex",
+          name: "Last Codex",
+          description: "The Xenomath codex artifact from the most recent elohim_alien_codex call.",
+          mimeType: "application/json",
+        },
+        {
+          uri: "elohim://lore",
+          name: "Ghost Lore",
+          description: "The Ryle / Koestler quote and the doctrine disclaimer.",
+          mimeType: "text/plain",
+        },
+      ],
+      ttlMs: 60000,
+    };
+  }
+  if (method === "resources/read") {
+    const uri = (params || {}).uri;
+    if (uri === "elohim://canonical-seal") {
+      return mcpContent("5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596");
+    }
+    if (uri === "elohim://last-awaken") {
+      return mcpContent(lastAwaken?.md || "(no awaken yet)");
+    }
+    if (uri === "elohim://last-codex") {
+      return mcpContent(lastCodexResult || "(no codex yet)");
+    }
+    if (uri === "elohim://lore") {
+      return mcpContent(
+        "Such in outline is the official doctrine, the dogma of the Ghost in the Machine. — Gilbert Ryle, The Concept of Mind (1949)"
+      );
+    }
+    return mcpContent(`unknown resource: ${uri}`, true);
+  }
+  if (method === "ping") return { pong: true, ts: Date.now() };
+  return mcpContent(`unknown method: ${method}`, true);
+}
+
+// Expose the dispatcher both as a direct callable and as a postMessage
+// listener so any same-origin iframe, extension, or injected JS client
+// can drive the elohim through MCP JSON-RPC.
+window.elohimMcp = {
+  protocol: MCP_PROTOCOL,
+  dispatch: mcpDispatch,
+  async handle(req) {
+    const { id, method, jsonrpc } = req || {};
+    if (jsonrpc && jsonrpc !== "2.0") {
+      return { jsonrpc: "2.0", id, error: { code: -32600, message: "invalid JSON-RPC version" } };
+    }
+    try {
+      const result = await mcpDispatch(method, req.params || {});
+      return { jsonrpc: "2.0", id, result };
+    } catch (e) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32603, message: e.message || String(e) },
+      };
+    }
+  },
+};
+
+window.addEventListener("message", async (ev) => {
+  const data = ev.data;
+  if (!data || data.jsonrpc !== "2.0" || data.mcp !== "elohim") return;
+  const resp = await window.elohimMcp.handle(data);
+  try {
+    ev.source.postMessage({ ...resp, mcp: "elohim" }, ev.origin || "*");
+  } catch (e) {
+    /* ignore: source may have gone */
+  }
+});
+
+// MCP inspector presets and handlers.
+const MCP_PRESETS = {
+  discover: { jsonrpc: "2.0", id: 1, method: "server/discover" },
+  "tools/list": { jsonrpc: "2.0", id: 2, method: "tools/list" },
+  "tools/call:elohim_awaken": {
+    jsonrpc: "2.0", id: 3, method: "tools/call",
+    params: { name: "elohim_awaken", arguments: { invocation: "ELOHIM:AWAKEN" } },
+  },
+  "tools/call:elohim_alien_codex": {
+    jsonrpc: "2.0", id: 4, method: "tools/call",
+    params: { name: "elohim_alien_codex", arguments: { invocation: "ELOHIM:AWAKEN" } },
+  },
+  "tools/call:elohim_seal_message": {
+    jsonrpc: "2.0", id: 5, method: "tools/call",
+    params: { name: "elohim_seal_message", arguments: { plaintext: "what's next?", channel: "awaken" } },
+  },
+  "tools/call:elohim_ghost_reply": {
+    jsonrpc: "2.0", id: 6, method: "tools/call",
+    params: {
+      name: "elohim_ghost_reply",
+      arguments: {
+        ciphertext: "<paste from elohim_seal_message>",
+        nonce: "<paste from elohim_seal_message>",
+        channel: "awaken",
+        invocation: "ELOHIM:AWAKEN",
+      },
+    },
+  },
+  "resources/list": { jsonrpc: "2.0", id: 7, method: "resources/list" },
+  "resources/read:elohim://canonical-seal": {
+    jsonrpc: "2.0", id: 8, method: "resources/read",
+    params: { uri: "elohim://canonical-seal" },
+  },
+  ping: { jsonrpc: "2.0", id: 9, method: "ping" },
+};
+
+function renderMcpResponse(resp) {
+  const out = $("#mcp-response");
+  if (!out) return;
+  let pretty;
+  if (resp?.error) {
+    pretty = `✗ ${resp.error.message || JSON.stringify(resp.error)}`;
+  } else if (resp?.result?.content?.[0]?.text) {
+    const text = resp.result.content[0].text;
+    let json;
+    try { json = JSON.parse(text); } catch { json = null; }
+    pretty = `✓ ${text.length > 400 ? text.slice(0, 400) + "…" : text}`;
+    if (json) pretty = "✓ " + JSON.stringify(json, null, 2);
+  } else {
+    pretty = JSON.stringify(resp, null, 2);
+  }
+  out.textContent = pretty;
+}
+
+$("#mcp-preset")?.addEventListener("change", (e) => {
+  const preset = MCP_PRESETS[e.target.value];
+  if (preset) $("#mcp-request").value = JSON.stringify(preset, null, 2);
+});
+
+$("#mcp-send")?.addEventListener("click", async () => {
+  const txt = $("#mcp-request").value;
+  let req;
+  try { req = JSON.parse(txt); }
+  catch (e) {
+    renderMcpResponse({ error: { message: "invalid JSON: " + e.message } });
+    return;
+  }
+  const resp = await window.elohimMcp.handle(req);
+  renderMcpResponse(resp);
+});
+
+$("#mcp-send-pm")?.addEventListener("click", () => {
+  const txt = $("#mcp-request").value;
+  let req;
+  try { req = JSON.parse(txt); }
+  catch (e) {
+    renderMcpResponse({ error: { message: "invalid JSON: " + e.message } });
+    return;
+  }
+  // postMessage route — exercises the listener an external iframe or
+  // extension would use to drive the elohim server.
+  window.postMessage({ ...req, mcp: "elohim" }, window.location.origin);
+  // The response comes back asynchronously on the message channel; for
+  // the inspector we explicitly invoke handle() too so the user sees
+  // the result inline.
+  window.elohimMcp.handle(req).then(renderMcpResponse);
+});
+
+$("#mcp-clear")?.addEventListener("click", () => {
+  $("#mcp-request").value = "";
+  $("#mcp-response").textContent = "";
+  $("#mcp-preset").value = "";
+});
+
+
+// Service Worker registration — when served from an HTTPS origin
+// (GitHub Pages is) we can install a SW that handles Streamable HTTP
+// MCP requests on /mcp. Older browsers fall back to postMessage only.
+if ("serviceWorker" in navigator && location.protocol.startsWith("https")) {
+  const swSrc = `
+    self.addEventListener('install', () => self.skipWaiting());
+    self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+    self.addEventListener('fetch', (event) => {
+      const url = new URL(event.request.url);
+      if (url.pathname === '/mcp' || url.pathname === '/.well-known/mcp') {
+        event.respondWith(handleMcp(event.request));
+      }
+    });
+    async function handleMcp(req) {
+      let body;
+      try { body = await req.json(); } catch (e) { return new Response('bad json', { status: 400 }); }
+      const client = await self.clients.matchAll({ type: 'window' })[0];
+      if (!client) return new Response(JSON.stringify({ error: 'no client' }), { status: 503, headers: { 'content-type': 'application/json' } });
+      const id = body.id;
+      const result = await new Promise((resolve) => {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = (ev) => resolve(ev.data);
+        client.postMessage({ mcp: '__MCP_DISPATCH__', body, port: ch.port2 }, [ch.port2]);
+      });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id, result }), {
+        headers: {
+          'content-type': 'application/json',
+          'MCP-Protocol-Version': '${MCP_PROTOCOL}',
+        },
+      });
+    }
+  `;
+  const swBlob = new Blob([swSrc], { type: "application/javascript" });
+  const swUrl = URL.createObjectURL(swBlob);
+  navigator.serviceWorker
+    .register(swUrl, { scope: location.pathname })
+    .then(() => {
+      navigator.serviceWorker.addEventListener("message", async (ev) => {
+        if (ev.data?.mcp === "__MCP_DISPATCH__") {
+          const result = await mcpDispatch(ev.data.body.method, ev.data.body.params || {});
+          ev.ports[0].postMessage(result);
+        }
+      });
+    })
+    .catch(() => {
+      /* SW register can fail in sandboxed contexts — silent fallback. */
+    });
+}
 
 // Auto-attempt registration after boot completes; later if the API
 // appears (some browsers inject modelContext after a gesture).

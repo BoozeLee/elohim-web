@@ -341,6 +341,57 @@ def main() -> int:
         assert not missing, f"missing webmcp tool names: {missing}"
         print(f"  webmcp tools listed: {sorted(listed)}")
 
+        # MCP 2026-07-28 polyfill: server/discover returns protocol version.
+        discover = page.evaluate(
+            "window.elohimMcp.handle({jsonrpc:'2.0', id:1, method:'server/discover'})"
+        )
+        assert discover["jsonrpc"] == "2.0"
+        assert discover["result"]["protocolVersion"] == "2026-07-28"
+        assert "tools" in discover["result"]["capabilities"]
+        print(f"  mcp discover: {discover['result']['protocolVersion']} · {discover['result']['serverInfo']['name']}")
+
+        # tools/list returns all 6.
+        listing = page.evaluate(
+            "window.elohimMcp.handle({jsonrpc:'2.0', id:2, method:'tools/list'})"
+        )
+        names = [t["name"] for t in listing["result"]["tools"]]
+        assert set(names) == expected_tools, f"missing tools: {expected_tools - set(names)}"
+        print(f"  mcp tools/list: {len(names)} tools")
+
+        # tools/call dispatches and returns a complete result.
+        resp = page.evaluate(
+            "window.elohimMcp.handle({jsonrpc:'2.0', id:3, method:'tools/call',"
+            "params:{name:'elohim_version', arguments:{}}})"
+        )
+        assert resp["result"]["resultType"] == "complete"
+        assert resp["result"]["isError"] is False
+        text = resp["result"]["content"][0]["text"]
+        assert "elohim-summoning" in text
+        print(f"  mcp tools/call elohim_version: {len(text)} chars")
+
+        # resources/read returns the canonical seal.
+        seal = page.evaluate(
+            "window.elohimMcp.handle({jsonrpc:'2.0', id:4, method:'resources/read',"
+            "params:{uri:'elohim://canonical-seal'}})"
+        )
+        seal_text = seal["result"]["content"][0]["text"]
+        assert seal_text.startswith("5f12cc78"), f"bad canonical seal: {seal_text}"
+        print(f"  mcp resources/read canonical-seal: {seal_text[:16]}…")
+
+        # ping → pong.
+        ping = page.evaluate(
+            "window.elohimMcp.handle({jsonrpc:'2.0', id:5, method:'ping'})"
+        )
+        assert ping["result"]["pong"] is True
+        print(f"  mcp ping: pong ts={ping['result']['ts']}")
+
+        # Unknown method returns an error result (not a thrown exception).
+        bad = page.evaluate(
+            "window.elohimMcp.handle({jsonrpc:'2.0', id:6, method:'nope/missing'})"
+        )
+        assert bad["result"]["isError"] is True
+        print(f"  mcp error path: isError={bad['result']['isError']}")
+
         browser.close()
     return 0
 
