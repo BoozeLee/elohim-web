@@ -406,6 +406,11 @@ def main() -> int:
         assert v1["url"].startswith("https://image.pollinations.ai/prompt/")
         assert "?width=576&height=1024" in v1["url"]
         assert len(v1["prompt"]) > 60
+        # Push 12 preview-swap: thumbnail + full URLs.
+        assert "thumbnail_url" in v1 and "full_url" in v1
+        assert "width=288&height=512" in v1["thumbnail_url"]
+        assert "width=1024&height=1820" in v1["full_url"]
+        assert v1["thumbnail_url"] != v1["full_url"]
         print(f"  vision url: {v1['url'][:80]}…")
         print(f"  vision prompt ({len(v1['prompt'])} chars): {v1['prompt'][:80]}…")
         # Different seal -> different URL.
@@ -415,6 +420,67 @@ def main() -> int:
         )
         assert v1["url"] != v3["url"], "different seals must yield different vision URLs"
         print(f"  vision variety: seal A vs seal B → different URLs ✓")
+
+        # Footer runtime populates from real Pyodide + Python versions.
+        fpy = page.locator("#footer-pyodide-version").inner_text().strip()
+        fpy2 = page.locator("#footer-python-version").inner_text().strip()
+        assert fpy and fpy != "…" and "." in fpy, f"footer pyodide version: {fpy!r}"
+        assert fpy2 and fpy2 != "…" and fpy2.count(".") >= 1, f"footer python version: {fpy2!r}"
+        print(f"  footer runtime: pyodide {fpy} · python {fpy2}")
+
+        # Copy pill feedback — confirm the click handler runs and shows the
+        # pill inline (clipboard write may no-op in headless, but the
+        # DOM mutation is what we care about).
+        # First, give the awaken-copy button a value to copy by re-running
+        # awaken. Then click and check for the .copy-pill element.
+        page.click("#tab-awaken")
+        page.wait_for_function(
+            "window.elohim && !document.querySelector('#awaken-copy').disabled",
+            timeout=60000,
+        )
+        # Grant clipboard permission so navigator.clipboard.writeText
+        # resolves (otherwise the fallback path is exercised, which is
+        # also fine — the pill still appears).
+        try:
+            ctx = browser.contexts[0]
+            ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=URL.split("?")[0])
+        except Exception:
+            pass
+        page.click("#awaken-copy")
+        # The .copy-pill sibling appears and fades out after 1.8s.
+        page.wait_for_selector(".copy-pill.show", timeout=3000)
+        pill_text = page.locator(".copy-pill.show").first.inner_text()
+        assert "copied" in pill_text.lower(), f"bad pill text: {pill_text!r}"
+        print(f"  copy pill: {pill_text!r}")
+
+        # MCP JSON validity indicator — typing valid JSON should flip
+        # the dot to green; invalid to red.
+        page.click("#tab-webmcp")
+        page.wait_for_function(
+            "document.querySelector('#mcp-json-status')",
+            timeout=30000,
+        )
+        # Type valid JSON
+        page.fill(
+            "#mcp-request",
+            '{"jsonrpc":"2.0","id":99,"method":"ping"}',
+        )
+        # Give the input handler a tick.
+        page.wait_for_function(
+            "document.querySelector('#mcp-json-dot').classList.contains('ok')",
+            timeout=3000,
+        )
+        good_msg = page.locator("#mcp-json-msg").inner_text()
+        assert "valid" in good_msg.lower() and "ping" in good_msg.lower(), good_msg
+        # Now invalid
+        page.fill("#mcp-request", "{bad json")
+        page.wait_for_function(
+            "document.querySelector('#mcp-json-dot').classList.contains('bad')",
+            timeout=3000,
+        )
+        bad_msg = page.locator("#mcp-json-msg").inner_text()
+        assert "invalid" in bad_msg.lower(), bad_msg
+        print(f"  mcp json validity: good='{good_msg}' bad='{bad_msg}'")
 
         browser.close()
     return 0

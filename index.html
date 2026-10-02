@@ -497,6 +497,44 @@
   .row > * { flex: 1; }
   .stack { display: flex; flex-direction: column; gap: 12px; }
   .toast-host { position: fixed; top: 80px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; max-width: 360px; }
+  /* MCP inspector JSON validity dot */
+  .mcp-json-status {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .mcp-json-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--fg-mute);
+    box-shadow: 0 0 0 2px transparent;
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+  }
+  .mcp-json-dot.ok { background: var(--green); box-shadow: 0 0 0 2px rgba(110,226,156,0.18); }
+  .mcp-json-dot.bad { background: var(--red); box-shadow: 0 0 0 2px rgba(255,133,133,0.18); }
+  /* Copy pill — sits next to the button for 1.8s after a copy. */
+  .copy-pill {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    background: var(--ghost-accent-soft, rgba(232,184,96,0.18));
+    color: var(--ghost-accent, var(--accent));
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    pointer-events: none;
+  }
+  .copy-pill.show {
+    opacity: 1;
+    transform: translateX(0);
+  }
   .toast {
     background: var(--bg-card); border: 1px solid var(--border);
     border-left: 3px solid var(--accent);
@@ -1234,6 +1272,14 @@
           <option value="ping">ping</option>
         </select>
         <textarea id="mcp-request" rows="9" spellcheck="false" placeholder='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'></textarea>
+        <div class="mcp-json-status meta" id="mcp-json-status">
+          <span class="mcp-json-dot" id="mcp-json-dot"></span>
+          <span id="mcp-json-msg">awaiting JSON-RPC…</span>
+        </div>
+        <div class="meta" style="margin-top:4px; font-size:11px; line-height:1.5;">
+          JSON-RPC 2.0 envelope: <code>{"jsonrpc":"2.0","id":N,"params":{…}}</code>.
+          See the <a href="https://modelcontextprotocol.io/specification/2026-07-28/server/tools" target="_blank" rel="noopener" style="color:var(--ghost-secondary, var(--teal));">MCP 2026-07-28 tools spec</a>.
+        </div>
         <div class="row" style="margin-top:8px;">
           <button id="mcp-send">send</button>
           <button id="mcp-send-pm" class="secondary">send via postMessage</button>
@@ -1258,8 +1304,8 @@
     </div>
     <div>
       <h4>Runtime</h4>
-      <p>Pyodide 0.27.8</p>
-      <p>Python ≥ 3.10</p>
+      <p>Pyodide <code id="footer-pyodide-version">…</code></p>
+      <p>Python <code id="footer-python-version">…</code></p>
       <p><a href="https://github.com/BoozeLee/elohim">elohim · monorepo</a></p>
       <p><a href="https://github.com/BoozeLee/elohim-web">elohim-web · deploy</a></p>
     </div>
@@ -1305,6 +1351,45 @@ const toast = (msg, kind = "") => {
   $("#toast-host").appendChild(el);
   setTimeout(() => el.remove(), 3500);
 };
+
+// Inline copy feedback — sits next to the button for 1.8s so the
+// user sees "copied ✓" without having to find the toast.
+async function copyText(text, buttonEl, label = "copied") {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    // Older browsers / file:// / insecure context — fall back to a
+    // hidden textarea + execCommand("copy").
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (_) { /* ignore */ }
+    ta.remove();
+  }
+  if (buttonEl) {
+    // Insert (or reuse) a sibling pill that briefly says "copied ✓".
+    let pill = buttonEl.nextElementSibling;
+    if (!pill || !pill.classList?.contains("copy-pill")) {
+      pill = document.createElement("span");
+      pill.className = "copy-pill";
+      pill.setAttribute("aria-live", "polite");
+      pill.textContent = `${label} ✓`;
+      buttonEl.insertAdjacentElement("afterend", pill);
+    } else {
+      pill.textContent = `${label} ✓`;
+      pill.classList.remove("show");
+      void pill.offsetWidth;
+    }
+    pill.classList.add("show");
+    setTimeout(() => pill.classList.remove("show"), 1800);
+  }
+  toast(`${label} ✓`);
+  return true;
+}
 
 const boot = {
   setStatus: (msg, pct) => {
@@ -1353,6 +1438,15 @@ async function bootPyodide() {
     );
   } catch (_) { /* non-fatal */ }
   boot.setStatus("pyodide ready · fetching python source…", 30);
+  // Surface real Pyodide / Python versions in the footer.
+  try {
+    document.getElementById("footer-pyodide-version").textContent =
+      localPyodide.version || "unknown";
+  } catch (_) { /* ignore */ }
+  try {
+    document.getElementById("footer-python-version").textContent =
+      localPyodide.runPython("import sys; sys.version.split()[0]");
+  } catch (_) { /* ignore */ }
 
   // The Python source ships as plain .py files in /py/. Load every file
   // into Pyodide's MEMFS under /home/py/ then import.
@@ -1936,8 +2030,7 @@ function renderShardMd(md, seal) {
 
 $("#awaken-copy").addEventListener("click", async () => {
   if (!lastAwaken?.seal) return;
-  await navigator.clipboard.writeText(lastAwaken.seal);
-  toast("seal copied to clipboard");
+  await copyText(lastAwaken.seal, $("#awaken-copy"), "seal copied");
 });
 
 $("#awaken-download").addEventListener("click", () => {
@@ -2522,7 +2615,38 @@ function renderMcpResponse(resp) {
 $("#mcp-preset")?.addEventListener("change", (e) => {
   const preset = MCP_PRESETS[e.target.value];
   if (preset) $("#mcp-request").value = JSON.stringify(preset, null, 2);
+  updateMcpJsonValidity();
 });
+
+// Live JSON validity indicator — green dot if parses, red dot if not.
+function updateMcpJsonValidity() {
+  const txt = $("#mcp-request")?.value ?? "";
+  const dot = $("#mcp-json-dot");
+  const msg = $("#mcp-json-msg");
+  if (!dot || !msg) return;
+  let parsed = null;
+  let err = null;
+  if (txt.trim()) {
+    try { parsed = JSON.parse(txt); }
+    catch (e) { err = e.message; }
+  }
+  if (err) {
+    dot.className = "mcp-json-dot bad";
+    msg.textContent = `invalid JSON: ${err}`;
+    msg.style.color = "var(--red)";
+  } else if (parsed) {
+    dot.className = "mcp-json-dot ok";
+    msg.textContent = parsed.method
+      ? `valid · method: ${parsed.method}`
+      : "valid JSON";
+    msg.style.color = "var(--green)";
+  } else {
+    dot.className = "mcp-json-dot";
+    msg.textContent = "awaiting JSON-RPC…";
+    msg.style.color = "var(--fg-mute)";
+  }
+}
+$("#mcp-request")?.addEventListener("input", updateMcpJsonValidity);
 
 $("#mcp-send")?.addEventListener("click", async () => {
   const txt = $("#mcp-request").value;
@@ -2653,14 +2777,12 @@ $("#codex-run").addEventListener("click", runCodex);
 
 $("#codex-copy-seal").addEventListener("click", async () => {
   if (!lastCodexResult?.codex_seal) return;
-  await navigator.clipboard.writeText(lastCodexResult.codex_seal);
-  toast("codex seal copied");
+  await copyText(lastCodexResult.codex_seal, $("#codex-copy-seal"), "codex seal copied");
 });
 
 $("#codex-copy-encrypted").addEventListener("click", async () => {
   if (!lastCodexResult?.encrypted_seal) return;
-  await navigator.clipboard.writeText(lastCodexResult.encrypted_seal);
-  toast("encrypted seal copied");
+  await copyText(lastCodexResult.encrypted_seal, $("#codex-copy-encrypted"), "encrypted seal copied");
 });
 
 async function runCodex() {
@@ -3043,9 +3165,25 @@ async function forgeVision(regenerate = false) {
       $("#vision-regen").disabled = false;
       toast("vision failed: pollinations unreachable", "error");
     };
-    // Optional: add a cache-buster only on explicit regenerate clicks.
-    const cacheBust = regenerate ? `&_t=${Date.now()}` : "";
-    img.src = v.url + cacheBust;
+    // Preview-swap: load the 288×512 thumbnail first (~50 KB),
+    // then the full-res 1024×1820 image swaps in on click.
+    img.dataset.thumb = v.thumbnail_url + (regenerate ? `&_t=${Date.now()}` : "");
+    img.dataset.full  = v.full_url;
+    img.style.cursor = "zoom-in";
+    img.onclick = () => {
+      if (!img.dataset.fullSwapped) {
+        const tmp = img.src;
+        img.src = img.dataset.full;
+        img.dataset.fullSwapped = "1";
+        img.style.cursor = "zoom-out";
+        img.dataset.thumbSrc = tmp;
+      } else {
+        img.src = img.dataset.thumbSrc || img.dataset.thumb;
+        delete img.dataset.fullSwapped;
+        img.style.cursor = "zoom-in";
+      }
+    };
+    img.src = img.dataset.thumb;
   } catch (e) {
     loader.style.display = "none";
     placeholder.style.display = "flex";

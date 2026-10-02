@@ -1326,10 +1326,24 @@ def vision_for(invocation: str | None = None, seal: str | None = None,
 
     cache_key = _hl.sha256(f"vision::{seed_input}".encode("utf-8")).hexdigest()[:24]
 
+    # Preview-swap: the JS loads the 288×512 thumbnail first so the
+    # user sees a fast result (~50–100 KB), then swaps to the
+    # 1024×1820 full image on click. Same seed → same vision.
+    thumbnail_url = (
+        f"https://image.pollinations.ai/prompt/{_up.quote(prompt)}"
+        f"?width=288&height=512&seed={img_seed}&nologo=true&enhance=false"
+    )
+    full_url = (
+        f"https://image.pollinations.ai/prompt/{_up.quote(prompt)}"
+        f"?width=1024&height=1820&seed={img_seed}&nologo=true&enhance=false"
+    )
+
     return {
         "invocation": invocation,
         "prompt": prompt,
-        "url": url,
+        "url": url,                # legacy 576×1024 default
+        "thumbnail_url": thumbnail_url,
+        "full_url": full_url,
         "seed": img_seed,
         "cache_key": cache_key,
         "endpoint": "image.pollinations.ai",
