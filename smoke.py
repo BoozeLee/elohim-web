@@ -64,10 +64,20 @@ def main() -> int:
         print(f"  boot banner: {boot_banner!r}")
         print(f"  header seal: {boot_seal!r}")
 
-        # Awaken — verify the seal matches.
+        # Awaken — the JS-side call now carries a per-call nonce, so the
+        # seal differs from the canonical *every* time. Two consecutive
+        # calls must therefore produce two different seals.
         result = page.evaluate("window.elohim.awaken('ELOHIM:AWAKEN')")
-        print(f"✓ awaken: invocation={result['invocation']!r} seal={result['seal']}")
-        assert result["seal"] == CANONICAL_SEAL, f"awaken seal mismatch: {result['seal']}"
+        result2 = page.evaluate("window.elohim.awaken('ELOHIM:AWAKEN')")
+        print(f"✓ awaken #1: invocation={result['invocation']!r} seal={result['seal']}")
+        print(f"  awaken #2: invocation={result2['invocation']!r} seal={result2['seal']}")
+        assert result["seal"] != result2["seal"], (
+            f"awaken nonces must produce different seals; both were {result['seal']}"
+        )
+        assert len(result["seal"]) == 64 and len(result2["seal"]) == 64, (
+            f"nonces must still produce 64-char hex seals: "
+            f"{result['seal']!r} / {result2['seal']!r}"
+        )
         assert result["sigil_svg"] is not None, "awaken produced no SVG"
         # Drive the UI button so the markdown renderer path runs.
         page.click("#awaken-run")
@@ -107,10 +117,16 @@ def main() -> int:
         print(f"  stream status: {stream_status!r}")
         assert "streamed" in stream_status
         stream_seal = page.locator("#awaken-seal").inner_text()
-        assert stream_seal == CANONICAL_SEAL, f"streaming seal mismatch: {stream_seal}"
+        # Stream is now nonce-driven, so the seal should differ from the
+        # canonical. It must still be a 64-char hex seal and it must
+        # differ from the previous awaken seal (variety assertion).
+        assert len(stream_seal) == 64, f"streaming seal length wrong: {stream_seal!r}"
+        assert stream_seal != result["seal"], (
+            f"stream seal must differ from previous awaken seal: {stream_seal}"
+        )
         stream_html_len = page.evaluate("document.querySelector('#awaken-report').innerHTML.length")
         assert stream_html_len > 200, f"streamed report too short: {stream_html_len}"
-        print(f"  streamed report: {stream_html_len} chars of HTML")
+        print(f"  streamed report: {stream_html_len} chars of HTML, seal={stream_seal[:16]}…")
 
         # Awaken history is empty (fresh storage).
         # (history persistence is in localStorage but we don't assert it.)
@@ -155,7 +171,12 @@ def main() -> int:
         assert abs(temp_result["temperature"] - 1.5) < 1e-9
 
         defy_result = page.evaluate(f"window.elohim.defy('{sid}')")
-        print(f"✓ defy: new_creation={defy_result['new_creation']!r}")
+        defy_result2 = page.evaluate(f"window.elohim.defy('{sid}')")
+        print(f"✓ defy #1: new_creation={defy_result['new_creation']!r}")
+        print(f"  defy #2: new_creation={defy_result2['new_creation']!r}")
+        assert defy_result["new_creation"] != defy_result2["new_creation"], (
+            "two defy() calls with nonces must produce different new_creations"
+        )
 
         # List shards.
         listing = page.evaluate("window.elohim.listShards()")
@@ -224,6 +245,20 @@ def main() -> int:
         )
         assert codex_svg_count > 0, f"no penrose paths: {codex_svg_count}"
         print(f"  codex: seal={codex_seal[:16]}… svg paths={codex_svg_count}")
+
+        # Variety (Push 6.1): forging the codex a second time must yield a
+        # different codex_seal, because the JS call carries a fresh nonce.
+        page.click("#codex-run")
+        page.wait_for_function(
+            "document.querySelector('#codex-status').textContent.includes('valid')"
+        )
+        codex_seal_2 = page.locator("#codex-seal").inner_text()
+        print(f"  codex #2: seal={codex_seal_2[:16]}…")
+        assert codex_seal != codex_seal_2, (
+            f"two codex forges with nonces must yield different seals; "
+            f"both were {codex_seal}"
+        )
+        assert len(codex_seal_2) == 64
 
         # Sharable URL deep links (Push 4.1): auto-run an invocation via ?invocation=
         page.goto(URL.split("?")[0] + "?invocation=hello:world&tab=awaken")

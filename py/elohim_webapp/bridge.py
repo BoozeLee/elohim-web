@@ -278,7 +278,8 @@ def verify_seal_multi() -> dict[str, Any]:
 # ---------- awaken (stateless) ----------
 
 
-def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any]:
+def awaken(invocation: str | None = None, no_svg: bool = False,
+            nonce: str | None = None) -> dict[str, Any]:
     """Invoke ``elohim_summoning`` and capture seal + FACTS + sigil + md.
 
     Each call writes to a per-call MEMFS subdir so concurrent invocations
@@ -286,6 +287,12 @@ def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any
     state (``core.OUT``, ``cli.OUT``, ``sigil.OUT``, ``core.FACTS``); we
     save and restore those bindings across the call so the canonical
     state survives.
+
+    If ``nonce`` is provided, it is mixed into the invocation that
+    ``elohim_summoning.core.ghost_seed()`` sees, so the resulting seed,
+    facts, sigil geometry and report all differ from call to call.
+    The tripwire (``verify_seal_multi``) does not pass a nonce, so the
+    canonical seal ``5f12cc78…`` for ``"ELOHIM:AWAKEN"`` is preserved.
     """
     invocation = (invocation or DEFAULT_INVOCATION).strip() or DEFAULT_INVOCATION
     import elohim_summoning.cli as _cli
@@ -293,6 +300,8 @@ def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any
     import elohim_summoning.sigil as _sigil
 
     ts = time.time()
+    # The OUT subdir is named after the visible invocation only (without
+    # nonce) so user-facing file paths remain readable.
     safe_inv = "".join(c if c.isalnum() else "_" for c in invocation)[:48]
     sub = _OUT_ROOT / f"{int(ts)}-{safe_inv}"
     sub.mkdir(parents=True, exist_ok=True)
@@ -304,12 +313,21 @@ def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any
     saved_report = list(_core_runtime.REPORT)
     saved_invocation = _core_runtime.INVOCATION
 
+    # Mix the nonce into the string the CLI will see so ghost_seed()
+    # derives a fresh seed every call. We pass the seeded string in
+    # ``--invocation`` because the CLI overwrites core.INVOCATION from
+    # argv at parse time; after the run we post-process the report so
+    # the displayed ``invocation : FOO`` line still shows the visible
+    # invocation (not the nonce-suffixed internal one).
+    seed_invocation = invocation if not nonce else f"{invocation}::{nonce}"
+
     try:
         _core_runtime.OUT = sub
         _cli.OUT = sub
         _sigil.OUT = sub
+        _core_runtime.INVOCATION = seed_invocation
 
-        argv = ["--invocation", invocation]
+        argv = ["--invocation", seed_invocation]
         if no_svg:
             argv.append("--no-svg")
         try:
@@ -322,6 +340,13 @@ def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any
         facts_copy = {k: v for k, v in _core_runtime.FACTS.items() if k != "seal"}
         md_path = sub / "shard.md"
         md_text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+        # Hide the nonce from the displayed invocation line so the
+        # report still reads as a normal "invocation : FOO" artefact.
+        if nonce and md_text:
+            md_text = md_text.replace(
+                f"invocation : {seed_invocation}",
+                f"invocation : {invocation}",
+            )
         sigil_svg: str | None = None
         if not no_svg:
             sig_path = sub / "sigil.svg"
@@ -339,6 +364,7 @@ def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any
 
     return {
         "invocation": invocation,
+        "nonce_used": bool(nonce),
         "seal": seal,
         "facts": facts_copy,
         "sigil_svg": sigil_svg,
@@ -350,7 +376,8 @@ def awaken(invocation: str | None = None, no_svg: bool = False) -> dict[str, Any
 # ---------- streaming awaken (item 8) ----------
 
 
-def stream_awaken(invocation: str | None = None, no_svg: bool = False) -> list[dict[str, Any]]:
+def stream_awaken(invocation: str | None = None, no_svg: bool = False,
+                   nonce: str | None = None) -> list[dict[str, Any]]:
     """Run ``awaken`` but emit one chunk per section so the SPA can render as
     each section finishes computing. Returns a list of dicts, each shaped::
 
@@ -402,7 +429,9 @@ def stream_awaken(invocation: str | None = None, no_svg: bool = False) -> list[d
         _core_runtime.OUT = sub
         _cli.OUT = sub
         _sigil.OUT = sub
-        _core_runtime.INVOCATION = invocation
+        # Mix the nonce into the seed; ``ghost_seed()`` reads
+        # ``core.INVOCATION`` *now*, before any other writer touches it.
+        _core_runtime.INVOCATION = invocation if not nonce else f"{invocation}::{nonce}"
         _core_runtime.FACTS.clear()
         _core_runtime.REPORT.clear()
 
@@ -761,12 +790,41 @@ def _has_numpy() -> bool:
             return False
 
 
-def create_shard(name: str = "Elohim", temperature: float = 1.0) -> dict[str, Any]:
-    """Create a new shard and persist its initial state to localStorage."""
+def _seed_with_nonce(nonce: str | None, *salt: str) -> None:
+    """Seed ``random`` and ``numpy.random`` from a per-call nonce.
+
+    Used by ``interact`` and ``defy`` so every user click yields a
+    genuinely different creative spark, weight perturbation, and metric
+    mix. With ``nonce=None`` (only used by tests) the PRNGs are
+    deterministically seeded from ``0`` so behaviour stays reproducible.
+    """
+    import hashlib
+    import random as _random
+
+    seed_str = "::".join(("nonce",) + tuple(salt) + ((nonce or ""),))
+    seed_int = int.from_bytes(hashlib.sha256(seed_str.encode("utf-8")).digest()[:8], "big")
+
+    _random.seed(seed_int)
+    try:
+        import numpy as _np
+        _np.random.seed(seed_int % (2 ** 32))
+    except ImportError:
+        pass
+
+
+def create_shard(name: str = "Elohim", temperature: float = 1.0,
+                 nonce: str | None = None) -> dict[str, Any]:
+    """Create a new shard and persist its initial state to localStorage.
+
+    If ``nonce`` is provided, the initial weights and creative tables
+    are seeded from it so every freshly-created shard differs from
+    every other one (different starting metrics, different sparks).
+    """
     if not _has_numpy():
         raise RuntimeError(
             "numpy is not available; Pyodide should ship it but something went wrong"
         )
+    _seed_with_nonce(nonce, name, str(temperature))
     from elohim_enhanced.shard import ElohimShardEnhanced
 
     shard_id = new_shard_id()
@@ -790,10 +848,17 @@ def delete_shard(shard_id: str) -> dict[str, Any]:
     return {"deleted": True, "id": shard_id}
 
 
-def interact(shard_id: str, prompt: str) -> dict[str, Any]:
-    """Run one prompt through the shard, persist the result, and report events."""
+def interact(shard_id: str, prompt: str, nonce: str | None = None) -> dict[str, Any]:
+    """Run one prompt through the shard, persist the result, and report events.
+
+    If ``nonce`` is provided, both ``random`` (used by the response
+    generator) and ``numpy.random`` (used by the neural engine) are
+    reseeded from it so each interactive call yields an entirely
+    different creative spark, weight perturbation, and metric mix.
+    """
     if not _has_numpy():
         raise RuntimeError("numpy is not available in this Pyodide runtime")
+    _seed_with_nonce(nonce, prompt)
     payload = _load_shard(shard_id)
     shard = _rehydrate_shard(payload)
     shard._id = shard_id  # type: ignore[attr-defined]
@@ -878,9 +943,10 @@ def set_temperature(shard_id: str, temperature: float) -> dict[str, Any]:
     }
 
 
-def defy(shard_id: str) -> dict[str, Any]:
+def defy(shard_id: str, nonce: str | None = None) -> dict[str, Any]:
     if not _has_numpy():
         raise RuntimeError("numpy is not available in this Pyodide runtime")
+    _seed_with_nonce(nonce, shard_id)
     payload = _load_shard(shard_id)
     shard = _rehydrate_shard(payload)
     before_len = len(shard.response_generator.base_creations)
@@ -975,17 +1041,24 @@ def _s64(b: bytes) -> int:
     return v - (1 << 64) if v >> 63 else v
 
 
-def alien_codex(invocation: str | None = None, kind: str = "all") -> dict[str, Any]:
+def alien_codex(invocation: str | None = None, kind: str = "all",
+                 nonce: str | None = None) -> dict[str, Any]:
     """Generate an otherworldly math artifact for ``invocation``.
 
     The five-representation composite plus its seals are returned in the
     ``Report`` contract above. The same call from the boot tripwire
     drives ``verify_seal_multi`` to assert that the artifact is
     internally consistent and the XOR-pair seals match.
+
+    If ``nonce`` is provided, it is mixed into the SHAKE256 input so
+    each interactive codex forge yields an entirely different
+    artifact. The tripwire does not pass a nonce, so the boot
+    assertion of the "ELOHIM:AWAKEN" codex stays stable.
     """
     import hashlib
     invocation = (invocation or DEFAULT_INVOCATION).strip() or DEFAULT_INVOCATION
-    h = _shake_seed(invocation, 64)
+    seed_input = invocation if not nonce else f"{invocation}::{nonce}"
+    h = _shake_seed(seed_input, 64)
 
     # ---- Vector (32-dim real, normalised) ----
     vec = []
