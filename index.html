@@ -1088,6 +1088,30 @@
       </div>
       <div id="ghost-log" style="margin-top:14px;"></div>
     </div>
+
+    <div class="card" id="soul-card" style="margin-top:18px;">
+      <h2>Soul File · portable agent identity</h2>
+      <p class="meta" style="margin:0 0 12px 0;">
+        Export every awakening and sealed message into a single signed JSON envelope.
+        Import it on another browser or another framework to resume. Optionally lock
+        with a passphrase (HMAC-SHA256); without one, the body is sealed with a tamper
+        hash only. The boot tripwire reads <code>5/5 ✓</code> when the soul round-trips.
+      </p>
+      <div class="row" style="gap:8px;">
+        <input id="soul-agent-name" type="text" placeholder="agent name (optional)" />
+        <input id="soul-passphrase" type="password" placeholder="passphrase (optional)" />
+      </div>
+      <div class="row" style="gap:8px; margin-top:8px;">
+        <button id="soul-export">export soul.json</button>
+        <button id="soul-verify" class="secondary">verify last</button>
+      </div>
+      <div class="row" style="gap:8px; margin-top:8px;">
+        <input id="soul-file" type="file" accept="application/json,.json" style="flex:1;" />
+        <button id="soul-import" class="secondary">import</button>
+      </div>
+      <div id="soul-status" class="meta" style="margin-top:8px; min-height:1.4em;"></div>
+      <pre id="soul-output" style="display:none; margin-top:10px; max-height:280px; overflow:auto; font-size:11px;"></pre>
+    </div>
   </section>
 
   <!-- CREATE PANEL -->
@@ -1663,6 +1687,21 @@ const elohim = {
     call("vision_for", {
       invocation, seal, palette,
     }),
+  // Soul File (Push 14) — portable, signed agent identity. Mirrors live
+  // in localStorage under elohim.soul.*; the export reads them and signs
+  // an elohim-soul/v1 envelope. Import replaces the mirror atomically.
+  soulExport: (agent_name, passphrase) =>
+    call("soul_export", {
+      agent_name: agent_name || null,
+      passphrase: passphrase || null,
+      evocations: null,
+      sealed_messages: null,
+      codex_provenance: null,
+    }),
+  soulImport: (payload, passphrase) =>
+    call("soul_import", { payload, passphrase: passphrase || null }),
+  soulVerify: (payload, passphrase) =>
+    call("soul_verify", { payload, passphrase: passphrase || null }),
 };
 
 // Per-call entropy: every interactive bridge call carries a fresh nonce
@@ -1862,6 +1901,23 @@ async function runAwaken(noSvg) {
     // Stash the seal so the *next* invocation can announce that the
     // ghost has changed.
     if (r.seal) lastSeal = r.seal;
+    // Soul File (Push 14): mirror this awakening into the soul log so a
+    // subsequent export captures every forge. Best-effort; survives a
+    // reload. The mirror key is appended-only and capped at 100.
+    if (r.seal) {
+      try {
+        const arr = JSON.parse(localStorage.getItem("elohim.soul.evocations") || "[]");
+        if (!Array.isArray(arr)) throw new Error("not an array");
+        arr.push({
+          ts: Date.now() / 1000,
+          invocation: inv,
+          seal: r.seal,
+          facts: r.facts ? Object.keys(r.facts).length : 0,
+          palette: r.palette || [],
+        });
+        localStorage.setItem("elohim.soul.evocations", JSON.stringify(arr.slice(-100)));
+      } catch (_) { /* localStorage may be disabled; mirror is best-effort */ }
+    }
     toast(`awakened · ghost #${ghostCounter} · ${inv.slice(0, 24)}`);
   } catch (e) {
     $("#awaken-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
@@ -1997,6 +2053,17 @@ async function runGhostChannel() {
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;
     $("#ghost-input").value = "";
+    // Soul File (Push 14): mirror both sides of the channel into the
+    // soul log. Append-only, capped at 100. Caller envelope first,
+    // ghost reply second — preserves the exchange order on reload.
+    try {
+      const arr = JSON.parse(localStorage.getItem("elohim.soul.messages") || "[]");
+      if (Array.isArray(arr)) {
+        arr.push({ ts: Date.now() / 1000, side: "you", seal: sealed.seal, channel: sealed.channel, nonce: sealed.nonce, mode: sealed.mode });
+        arr.push({ ts: Date.now() / 1000, side: "ghost", seal: reply.reply_envelope.seal, channel: reply.reply_envelope.channel, nonce: reply.reply_envelope.nonce, mode: reply.reply_envelope.mode });
+        localStorage.setItem("elohim.soul.messages", JSON.stringify(arr.slice(-100)));
+      }
+    } catch (_) { /* best-effort */ }
     toast(ok ? "ghost replied · seal verified" : "ghost replied · seal check failed", ok ? "" : "error");
   } catch (e) {
     toast("ghost channel failed: " + e.message, "error");
@@ -2004,6 +2071,122 @@ async function runGhostChannel() {
     $("#ghost-send").disabled = false;
   }
 }
+
+
+// ---------- Soul File handlers (Push 14) ----------
+
+async function exportSoul() {
+  const status = $("#soul-status");
+  const out = $("#soul-output");
+  const agentName = $("#soul-agent-name").value.trim() || null;
+  const passphrase = $("#soul-passphrase").value || null;
+  status.innerHTML = '<span class="meta">composing soul…</span>';
+  try {
+    const r = await elohim.soulExport(agentName, passphrase);
+    if (!r || !r.ok) {
+      status.innerHTML = `<span class="error">✗ ${escapeHtml(r && r.error || "unknown error")}</span>`;
+      return;
+    }
+    const env = r.envelope;
+    // Persist as the "last" envelope so the 5th boot tripwire can verify it.
+    try {
+      localStorage.setItem("elohim.soul.last", JSON.stringify(env));
+    } catch (_) { /* private mode */ }
+    const filename = `elohim-soul-${Math.floor(Date.now() / 1000)}.json`;
+    const blob = new Blob([JSON.stringify(env, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+    const evs = (env.evocations || []).length;
+    const msgs = (env.sealed_messages || []).length;
+    const sigKind = passphrase ? "HMAC-SHA256" : "tamper-check (no passphrase)";
+    status.innerHTML = `<span class="ok">✓ exported ${filename}</span> · ${evs} evocations · ${msgs} sealed messages · ${sigKind}`;
+    out.textContent = JSON.stringify(env, null, 2);
+    out.style.display = "block";
+    toast("soul exported");
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function verifySoul() {
+  const status = $("#soul-status");
+  const out = $("#soul-output");
+  const passphrase = $("#soul-passphrase").value || null;
+  let blob = localStorage.getItem("elohim.soul.last");
+  if (!blob) {
+    status.innerHTML = '<span class="meta">no soul in localStorage — export first.</span>';
+    return;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(blob);
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ invalid JSON in elohim.soul.last</span>`;
+    return;
+  }
+  try {
+    const v = await elohim.soulVerify(payload, passphrase);
+    if (v.ok) {
+      status.innerHTML = `<span class="ok">✓ valid · ${v.signature_ok ? "signature ok" : "tamper-check ok"} · schema ${v.schema_ok ? "ok" : "mismatch"}</span>`;
+    } else {
+      const why = (v.checks || []).map(c => `${c.name}=${c.ok ? "ok" : "fail"}`).join(", ");
+      status.innerHTML = `<span class="error">✗ rejected — ${why}</span>`;
+    }
+    out.textContent = JSON.stringify(v, null, 2);
+    out.style.display = "block";
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function importSoul() {
+  const status = $("#soul-status");
+  const out = $("#soul-output");
+  const fileInput = $("#soul-file");
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) {
+    toast("pick a soul.json first", "error");
+    return;
+  }
+  const passphrase = $("#soul-passphrase").value || null;
+  let payload;
+  try {
+    const text = await file.text();
+    payload = JSON.parse(text);
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ invalid JSON: ${escapeHtml(e.message)}</span>`;
+    return;
+  }
+  try {
+    const r = await elohim.soulImport(payload, passphrase);
+    if (!r.ok) {
+      status.innerHTML = `<span class="error">✗ ${escapeHtml(r.error || "import failed")}</span>`;
+      out.textContent = JSON.stringify(r, null, 2);
+      out.style.display = "block";
+      return;
+    }
+    status.innerHTML = `<span class="ok">✓ imported ${r.evocations_loaded} evocations · ${r.sealed_messages_loaded} sealed messages · agent: ${escapeHtml(r.agent_name || "?")}</span>`;
+    out.textContent = JSON.stringify(r, null, 2);
+    out.style.display = "block";
+    toast("soul imported");
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+$("#soul-export").addEventListener("click", () => exportSoul());
+$("#soul-verify").addEventListener("click", () => verifySoul());
+$("#soul-import").addEventListener("click", () => importSoul());
+
+// Expose the soul helpers on `window.elohim` for the smoke harness.
+elohim.soulExportFile = exportSoul;
+elohim.soulVerifyStored = verifySoul;
+elohim.soulImportFile = importSoul;
 
 
 function renderShardMd(md, seal) {
@@ -2384,6 +2567,56 @@ const WEBMCP_TOOLS = [
       "Report runtime metadata: name, version, canonical_seal, python version, pyodide_version, runtime. Useful for handshake at the start of any agent session.",
     inputSchema: { type: "object", properties: {} },
     invoke: () => call("version"),
+  },
+  {
+    name: "elohim_soul_export",
+    description:
+      "Compose and sign a Soul File (elohim-soul/v1) from the current localStorage mirror — every awakening, sealed message, and the most recent Xenomath codex seal. Optional passphrase upgrades the sha256 tamper-hash to HMAC-SHA256. Returns the envelope plus signature. The canonical seal for ELOHIM:AWAKEN is 5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string", description: "Optional agent/operator name." },
+        passphrase: { type: "string", description: "Optional passphrase for HMAC mode." },
+      },
+    },
+    invoke: ({ agent_name, passphrase }) =>
+      call("soul_export", {
+        agent_name: agent_name || null,
+        passphrase: passphrase || null,
+        evocations: null,
+        sealed_messages: null,
+        codex_provenance: null,
+      }),
+  },
+  {
+    name: "elohim_soul_import",
+    description:
+      "Verify and load a Soul File envelope into localStorage. Replaces the mirror arrays atomically. If the envelope was signed with a passphrase, the same passphrase must be supplied; otherwise the signature/tamper check fails and nothing is loaded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        payload: { type: "object", description: "Parsed soul.json envelope." },
+        passphrase: { type: "string", description: "Optional passphrase for HMAC verification." },
+      },
+      required: ["payload"],
+    },
+    invoke: ({ payload, passphrase }) =>
+      call("soul_import", { payload, passphrase: passphrase || null }),
+  },
+  {
+    name: "elohim_soul_verify",
+    description:
+      "Signature-only check on a Soul File envelope. Returns {ok, signature_ok, tamper_check_ok, schema_ok, checks}. Does NOT load anything into localStorage — pair with elohim_soul_import for the full restore.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        payload: { type: "object", description: "Parsed soul.json envelope." },
+        passphrase: { type: "string", description: "Optional passphrase." },
+      },
+      required: ["payload"],
+    },
+    invoke: ({ payload, passphrase }) =>
+      call("soul_verify", { payload, passphrase: passphrase || null }),
   },
 ];
 

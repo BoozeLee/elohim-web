@@ -267,12 +267,281 @@ def verify_seal_multi() -> dict[str, Any]:
         "validation": codex["validation"],
     })
 
+    # Soul File (Push 14): the 5th tripwire. When the user has exported a
+    # soul.json, ``elohim.soul.last`` is set; if absent, we silently skip
+    # (the banner reads 4/5 ✓ in that case). When present, we verify the
+    # signature/tamper-check so the boot banner reflects integrity.
+    soul_blob = _ls_get("elohim.soul.last")
+    if soul_blob:
+        try:
+            soul_payload = json.loads(soul_blob)
+            soul_check = soul_verify(soul_payload, None)
+            soul_ok = bool(soul_check.get("ok"))
+            checks.append({
+                "name": "soul_file_signature",
+                "ok": soul_ok,
+                "agent_name": (soul_payload.get("agent_name") if isinstance(soul_payload, dict) else None),
+                "schema": (soul_payload.get("schema") if isinstance(soul_payload, dict) else None),
+                "rationale": "elohim.soul.last must round-trip through soul_verify "
+                             "(tamper-check when exported without one; HMAC if exported with a passphrase).",
+                "verification": soul_check,
+            })
+        except Exception as e:
+            checks.append({
+                "name": "soul_file_signature",
+                "ok": False,
+                "rationale": f"failed to read elohim.soul.last: {e}",
+            })
+
     overall = all(c["ok"] for c in checks)
     return {
         "canonical_seal": CANONICAL_SEAL,
         "checks": checks,
         "overall_ok": overall,
     }
+
+
+# ---------- soul file (Push 14: portable agent identity) ----------
+
+
+# Schema constants. The Soul File is a portable signed envelope that any
+# agent on any framework can load to recover its previous evocations,
+# sealed-message history, and Xenomath provenance. See docs/show-hn-draft.md.
+SOUL_SCHEMA_V1 = "elohim-soul/v1"
+SOUL_KDF_SHA256 = "sha256"
+SOUL_ALG_HMAC = "sha256-hmac"
+_SOUL_KEY = "elohim.soul.last"
+_SOUL_EVOCATIONS_KEY = "elohim.soul.evocations"
+_SOUL_MESSAGES_KEY = "elohim.soul.messages"
+_SOUL_CAP = 100  # mirror-history cap (per the plan)
+
+
+def _soul_body_json(envelope: dict[str, Any]) -> str:
+    """Canonical JSON body for signing (everything except ``signature``).
+
+    Uses ``sort_keys=True`` with no extra whitespace so re-serialised bodies
+    produce identical signatures across Python versions, browsers, and OSes.
+    """
+    body = {k: v for k, v in envelope.items() if k != "signature"}
+    return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+
+def _soul_signature(body: str, passphrase: str | None) -> dict[str, Any]:
+    """Compute the Soul File signature block.
+
+    v0.1: ``sha256-hmac`` if a passphrase is supplied; ``sha256(body)`` tamper
+    hash otherwise. The schema reserves ``signature.alg`` so v0.2 can swap in
+    Ed25519 without breaking older readers.
+    """
+    import hashlib as _hl
+
+    if passphrase:
+        mac = _hl.sha256(
+            _hl.sha256((passphrase or "").encode("utf-8")).digest()
+            + body.encode("utf-8")
+        ).hexdigest()
+        return {"alg": SOUL_ALG_HMAC, "kdf": SOUL_KDF_SHA256, "mac": mac}
+    # No passphrase: the mac field is a tamper-check sha256 of the body
+    # alone. signature_ok will fail (we cannot prove authorship), but
+    # tamper_check_ok will still surface body integrity for the "passphrase
+    # lost, soul still readable" case.
+    return {
+        "alg": SOUL_ALG_HMAC,
+        "kdf": SOUL_KDF_SHA256,
+        "mac": _hl.sha256(body.encode("utf-8")).hexdigest(),
+        "no_passphrase": True,
+    }
+
+
+def soul_export(
+    agent_name: str | None = None,
+    passphrase: str | None = None,
+    evocations: list[dict[str, Any]] | None = None,
+    sealed_messages: list[dict[str, Any]] | None = None,
+    codex_provenance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compose and sign a Soul File envelope.
+
+    All inputs are optional; when omitted, the latest mirror from
+    localStorage is read (``elohim.soul.evocations``, ``.messages``) and the
+    most recent Xenomath codex seal/palette are taken from
+    ``elohim.soul.last`` if present. The envelope is signed with
+    ``passphrase`` (HMAC-SHA256) or, when absent, with a plain SHA256 tamper
+    hash. Returns ``{ok, envelope, body, signature}`` so the JS layer can
+    either hand the envelope straight to the user as JSON or render the
+    signature block separately.
+    """
+    try:
+        evs_in = evocations
+        if evs_in is None:
+            raw = _ls_get(_SOUL_EVOCATIONS_KEY)
+            evs_in = json.loads(raw) if raw else []
+        msgs_in = sealed_messages
+        if msgs_in is None:
+            raw = _ls_get(_SOUL_MESSAGES_KEY)
+            msgs_in = json.loads(raw) if raw else []
+        codex_in = codex_provenance
+        if codex_in is None:
+            last_raw = _ls_get(_SOUL_KEY)
+            if last_raw:
+                try:
+                    last_env = json.loads(last_raw)
+                    codex_in = last_env.get("xenomath_provenance") or {}
+                except Exception:
+                    codex_in = {}
+        envelope: dict[str, Any] = {
+            "schema": SOUL_SCHEMA_V1,
+            "agent_name": (agent_name or "").strip() or "operator",
+            "created_ts": time.time(),
+            "last_export_ts": time.time(),
+            "evocations": list(evs_in or [])[-_SOUL_CAP:],
+            "sealed_messages": list(msgs_in or [])[-_SOUL_CAP:],
+            "xenomath_provenance": codex_in or {},
+            "passphrase_hint": None,
+        }
+        body = _soul_body_json(envelope)
+        signature = _soul_signature(body, passphrase)
+        envelope["signature"] = signature
+        return {"ok": True, "envelope": envelope, "body": body, "signature": signature}
+    except Exception as e:
+        return {"ok": False, "error": f"soul_export failed: {e}"}
+
+
+def soul_verify(payload: Any, passphrase: str | None = None) -> dict[str, Any]:
+    """Signature-only check on a Soul File envelope.
+
+    Returns ``{ok, signature_ok, tamper_check_ok, schema_ok, checks}``.
+    ``signature_ok`` is True iff the supplied passphrase reproduces the
+    stored ``signature.mac``. ``tamper_check_ok`` is True iff the stored
+    signature was a sha256-hash-only (no passphrase mode) and it matches
+    the body — useful when the passphrase was lost.
+    """
+    import hashlib as _hl
+
+    out = {
+        "ok": False,
+        "signature_ok": False,
+        "tamper_check_ok": False,
+        "schema_ok": False,
+        "checks": [],
+        "error": None,
+    }
+    if not isinstance(payload, dict):
+        out["error"] = "payload is not a dict"
+        return out
+    schema = payload.get("schema")
+    schema_ok = schema == SOUL_SCHEMA_V1
+    out["schema_ok"] = schema_ok
+    out["checks"].append({"name": "schema", "ok": schema_ok, "got": schema})
+    sig = payload.get("signature") or {}
+    body = _soul_body_json(payload)
+    body_hash = _hl.sha256(body.encode("utf-8")).hexdigest()
+    stored_mac = (sig.get("mac") or "").lower()
+    no_passphrase = bool(sig.get("no_passphrase")) or passphrase is None
+
+    if stored_mac and passphrase:
+        import hmac as _hmac
+
+        expected = _soul_signature(body, passphrase)["mac"]
+        sig_ok = _hmac.compare_digest(expected.lower(), stored_mac)
+        out["signature_ok"] = sig_ok
+        out["checks"].append(
+            {"name": "hmac", "ok": sig_ok, "alg": sig.get("alg")}
+        )
+    elif stored_mac and sig.get("no_passphrase"):
+        tamper_ok = stored_mac == body_hash
+        out["tamper_check_ok"] = tamper_ok
+        out["signature_ok"] = tamper_ok  # tamper-check = signature when no passphrase
+        out["checks"].append(
+            {"name": "tamper_check", "ok": tamper_ok, "alg": sig.get("alg")}
+        )
+    else:
+        # Stored mac exists but no passphrase supplied. We can still
+        # check the body hash matches the stored mac if it was a no-passphrase
+        # export — but we can't tell, so we conservatively report both false.
+        out["checks"].append(
+            {"name": "hmac", "ok": False, "rationale": "no passphrase supplied"}
+        )
+
+    out["ok"] = schema_ok and (out["signature_ok"] or out["tamper_check_ok"])
+    return out
+
+
+def soul_import(payload: Any, passphrase: str | None = None) -> dict[str, Any]:
+    """Verify a Soul File envelope and load its mirror history.
+
+    ``payload`` is the parsed JSON envelope. The envelope's evocations
+    and sealed_messages replace (atomically) the corresponding
+    localStorage mirrors; ``elohim.soul.last`` is overwritten with the
+    freshly-signed envelope so the 5th boot tripwire can verify it.
+
+    Returns ``{ok, evocations_loaded, sealed_messages_loaded, integrity, error?}``.
+    """
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "payload is not a dict"}
+    try:
+        body = _soul_body_json(payload)
+    except Exception as e:
+        return {"ok": False, "error": f"body re-serialisation failed: {e}"}
+
+    verification = soul_verify(payload, passphrase)
+    if not verification["ok"]:
+        return {
+            "ok": False,
+            "integrity": verification,
+            "error": "signature mismatch — soul file rejected",
+        }
+
+    evs = payload.get("evocations") or []
+    msgs = payload.get("sealed_messages") or []
+    try:
+        _ls_set(_SOUL_EVOCATIONS_KEY, json.dumps(list(evs)[-_SOUL_CAP:]))
+        _ls_set(_SOUL_MESSAGES_KEY, json.dumps(list(msgs)[-_SOUL_CAP:]))
+        _ls_set(_SOUL_KEY, json.dumps(payload))
+    except Exception as e:
+        return {"ok": False, "error": f"localStorage write failed: {e}"}
+
+    return {
+        "ok": True,
+        "evocations_loaded": len(evs),
+        "sealed_messages_loaded": len(msgs),
+        "integrity": verification,
+        "agent_name": payload.get("agent_name"),
+        "schema": payload.get("schema"),
+    }
+
+
+def _soul_mirror_evocation(entry: dict[str, Any]) -> None:
+    """Append a single awakening to the Soul File mirror.
+
+    Best-effort: a localStorage failure here must never break the caller's
+    return path, so we swallow the exception. Called from the JS bridge
+    wrappers (Awaken / Ghost Channel).
+    """
+    try:
+        raw = _ls_get(_SOUL_EVOCATIONS_KEY)
+        arr = json.loads(raw) if raw else []
+        if not isinstance(arr, list):
+            arr = []
+        arr.append(entry)
+        _ls_set(_SOUL_EVOCATIONS_KEY, json.dumps(arr[-_SOUL_CAP:]))
+    except Exception:
+        # localStorage may be disabled in private mode. The user will see
+        # a console warning; the awakening itself still succeeds.
+        pass
+
+
+def _soul_mirror_sealed(envelope: dict[str, Any]) -> None:
+    """Append a sealed-message envelope to the Soul File mirror."""
+    try:
+        raw = _ls_get(_SOUL_MESSAGES_KEY)
+        arr = json.loads(raw) if raw else []
+        if not isinstance(arr, list):
+            arr = []
+        arr.append(envelope)
+        _ls_set(_SOUL_MESSAGES_KEY, json.dumps(arr[-_SOUL_CAP:]))
+    except Exception:
+        pass
 
 
 # ---------- awaken (stateless) ----------

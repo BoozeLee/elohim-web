@@ -1,0 +1,18 @@
+{
+  "schema": "elohim-soul/v1",
+  "agent_name": "",
+  "created_ts": null,
+  "last_export_ts": null,
+  "evocations": [],
+  "sealed_messages": [],
+  "xenomath_provenance": {
+    "last_codex_seal": null,
+    "last_palette": []
+  },
+  "passphrase_hint": null,
+  "signature": {
+    "alg": "sha256-hmac",
+    "kdf": "sha256",
+    "mac": null
+  }
+}

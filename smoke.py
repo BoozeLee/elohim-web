@@ -335,6 +335,7 @@ def main() -> int:
             "elohim_awaken", "elohim_alien_codex",
             "elohim_seal_message", "elohim_open_seal",
             "elohim_ghost_reply", "elohim_version",
+            "elohim_soul_export", "elohim_soul_import", "elohim_soul_verify",
         }
         listed = set(tools_known)
         missing = expected_tools - listed
@@ -357,6 +358,11 @@ def main() -> int:
         names = [t["name"] for t in listing["result"]["tools"]]
         assert set(names) == expected_tools, f"missing tools: {expected_tools - set(names)}"
         print(f"  mcp tools/list: {len(names)} tools")
+
+        # Push 14 (Soul File): three new tools must be present.
+        soul_tools = {"elohim_soul_export", "elohim_soul_import", "elohim_soul_verify"}
+        assert soul_tools.issubset(set(names)), f"missing soul tools: {soul_tools - set(names)}"
+        print(f"  mcp soul tools: {sorted(soul_tools)}")
 
         # tools/call dispatches and returns a complete result.
         resp = page.evaluate(
@@ -481,6 +487,106 @@ def main() -> int:
         bad_msg = page.locator("#mcp-json-msg").inner_text()
         assert "invalid" in bad_msg.lower(), bad_msg
         print(f"  mcp json validity: good='{good_msg}' bad='{bad_msg}'")
+
+        # ---- Soul File (Push 14): portable, signed agent identity ----
+        # After awaken + ghost channel, soul_export must return a valid
+        # envelope, signature must be tamper-evident, and the tripwire
+        # banner must report 5/5 after the round-trip.
+        page.click("#tab-awaken")
+        page.wait_for_selector("#soul-export", timeout=30000)
+
+        # (1) soul_export returns a non-empty envelope with the right schema.
+        soul_env = page.evaluate(
+            "window.elohim.soulExport('smoke-agent', null)"
+        )
+        assert soul_env["ok"] is True, f"soul_export failed: {soul_env}"
+        assert soul_env["envelope"]["schema"] == "elohim-soul/v1"
+        assert soul_env["envelope"]["agent_name"] == "smoke-agent"
+        assert isinstance(soul_env["envelope"]["evocations"], list)
+        assert soul_env["envelope"]["signature"]["alg"] == "sha256-hmac"
+        ev_count = len(soul_env["envelope"]["evocations"])
+        msg_count = len(soul_env["envelope"]["sealed_messages"])
+        print(f"  soul_export: schema ok · {ev_count} evocations · {msg_count} sealed messages")
+
+        # (2) soul_export with passphrase produces an HMAC signature that
+        # differs from the no-passphrase tamper-check.
+        soul_env_p = page.evaluate(
+            "window.elohim.soulExport('smoke-agent', 'hunter2')"
+        )
+        assert soul_env_p["envelope"]["signature"]["mac"] != soul_env["envelope"]["signature"]["mac"]
+        # Wrong passphrase must reject.
+        import json as _json
+        soul_env_p_json = _json.dumps(soul_env_p["envelope"])
+        bad_verify = page.evaluate(
+            f"window.elohim.soulVerify({soul_env_p_json}, 'wrong')"
+        )
+        assert bad_verify["ok"] is False, f"HMAC verify accepted wrong passphrase: {bad_verify}"
+        # Right passphrase must accept.
+        good_verify = page.evaluate(
+            f"window.elohim.soulVerify({soul_env_p_json}, 'hunter2')"
+        )
+        assert good_verify["ok"] is True and good_verify["signature_ok"] is True
+        print(f"  soul HMAC: wrong-pp rejected · right-pp accepted")
+
+        # (3) Tamper rejection: edit one byte, verify must fail.
+        soul_env_json = _json.dumps(soul_env["envelope"])
+        tampered = page.evaluate(
+            f"""(() => {{
+              const env = JSON.parse(JSON.stringify({soul_env_json}));
+              env.agent_name = 'tampered';
+              return env;
+            }})()"""
+        )
+        tampered_json = _json.dumps(tampered)
+        tamper_verify = page.evaluate(
+            f"window.elohim.soulVerify({tampered_json}, null)"
+        )
+        assert tamper_verify["ok"] is False, f"tampered envelope accepted: {tamper_verify}"
+        print(f"  soul tamper: rejected ✓")
+
+        # (4) Round-trip across reload: stash the envelope into
+        # localStorage as the "last" soul, reload the page WITHOUT the
+        # ?invocation= param (which would auto-run awaken and add a
+        # phantom mirror entry), and import must restore the same
+        # evocations.
+        page.evaluate(
+            f"localStorage.setItem('elohim.soul.last', JSON.stringify({soul_env_json}))"
+        )
+        page.evaluate(
+            f"localStorage.setItem('elohim.soul.evocations', JSON.stringify({_json.dumps(soul_env['envelope']['evocations'])}))"
+        )
+        page.evaluate(
+            f"localStorage.setItem('elohim.soul.messages', JSON.stringify({_json.dumps(soul_env['envelope']['sealed_messages'])}))"
+        )
+        clean_url = URL.split("?")[0]
+        page.goto(clean_url)
+        wait_for_boot(page)
+        # Soul mirror must survive the reload.
+        survived_evs = page.evaluate(
+            f"JSON.parse(localStorage.getItem('elohim.soul.evocations') || '[]')"
+        )
+        assert len(survived_evs) == ev_count, f"evocations lost on reload: {len(survived_evs)} vs {ev_count}"
+        print(f"  soul reload: {len(survived_evs)} evocations survived")
+
+        # (5) Re-import the same envelope after reload; the bridge must
+        # accept and replace the mirror arrays atomically.
+        imported = page.evaluate(
+            f"window.elohim.soulImport({soul_env_json}, null)"
+        )
+        assert imported["ok"] is True, f"soul_import failed: {imported}"
+        assert imported["evocations_loaded"] == ev_count
+        assert imported["sealed_messages_loaded"] == msg_count
+        assert imported["integrity"]["schema_ok"] is True
+        print(f"  soul import: {imported['evocations_loaded']} evocations · {imported['sealed_messages_loaded']} messages restored")
+
+        # (6) Boot tripwire reads 5/5 ✓ after a successful soul
+        # round-trip — the banner derives X/Y directly from the
+        # check count, so the 5th tripwire surfaces as 5.
+        boot_banner_final = page.locator("#boot-seal").inner_text()
+        assert "5/5" in boot_banner_final or "5 / 5" in boot_banner_final, (
+            f"expected 5/5 tripwire after soul round-trip: {boot_banner_final!r}"
+        )
+        print(f"  soul tripwire: {boot_banner_final!r}")
 
         browser.close()
     return 0
