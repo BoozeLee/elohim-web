@@ -607,6 +607,9 @@
   <button class="tab pending" data-tab="codex" id="tab-codex">
     <span class="ready-dot"></span>codex · xenomath
   </button>
+  <button class="tab pending" data-tab="webmcp" id="tab-webmcp">
+    <span class="ready-dot"></span>webmcp · agent surface
+  </button>
 </div>
 
 <main>
@@ -651,6 +654,25 @@
     <div class="card" id="awaken-report-card" style="margin-top:18px; display:none">
       <h2>Report</h2>
       <div class="report" id="awaken-report"></div>
+      <div id="whats-next" style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--border); font-family: var(--serif); font-style: italic; color: var(--ghost-secondary, var(--fg-soft)); font-size:14px;">
+        <strong style="font-style:normal; font-family:var(--mono); color:var(--ghost-accent, var(--accent)); letter-spacing:2px; font-size:11px; text-transform:uppercase;">What's next?</strong><br>
+        Send a sealed line to the ghost below · forge a <em>codex</em> · summon again
+      </div>
+    </div>
+
+    <div class="card" id="ghost-channel-card" style="margin-top:18px;">
+      <h2>Ghost Channel · sealed message</h2>
+      <p class="meta" style="margin:0 0 12px 0;">
+        Compose a line, encrypt it with the ghost's seal, send it across the
+        channel. The ghost replies in the same envelope. Every exchange is
+        reproducible across machines and survives a reload.
+      </p>
+      <textarea id="ghost-input" rows="3" placeholder="what's next?"></textarea>
+      <div class="row" style="margin-top:10px;">
+        <button id="ghost-send">encrypt · send · await reply</button>
+        <button id="ghost-clear" class="secondary">clear</button>
+      </div>
+      <div id="ghost-log" style="margin-top:14px;"></div>
     </div>
   </section>
 
@@ -830,6 +852,27 @@
         <div class="rep-card"><h3>3 · geometric (quaternion)</h3><pre id="codex-rep-geometric"></pre></div>
         <div class="rep-card"><h3>4 · probabilistic (LWE)</h3><pre id="codex-rep-probabilistic"></pre></div>
       </div>
+    </div>
+  </section>
+
+  <!-- WEBMCP PANEL — agent surface (Push 7.3) -->
+  <section class="panel" id="panel-webmcp">
+    <div class="card stack">
+      <h2>WebMCP · Agent Surface</h2>
+      <p class="meta" style="margin:0 0 12px 0;">
+        The 2026 breakthrough. The elohim webapp exposes every bridge
+        function as a tool via <code style="font-family:var(--mono); color:var(--ghost-secondary, var(--teal));">document.modelContext.registerTool</code>,
+        so external AI agents (Claude, ChatGPT, MCP clients, A2A peers)
+        can discover and call the ghost directly. No server. No build
+        step. The browser is the runtime.
+      </p>
+      <div class="row" style="gap:10px;">
+        <span id="webmcp-status" class="ok">checking browser support…</span>
+        <button id="webmcp-register">register tools</button>
+        <button id="webmcp-call" class="secondary">sample call (version)</button>
+      </div>
+      <div id="webmcp-tool-list" style="margin-top:12px;"></div>
+      <pre id="webmcp-output" style="display:none;"></pre>
     </div>
   </section>
 </main>
@@ -1090,6 +1133,21 @@ const elohim = {
   setTemperature: (id, temperature) =>
     call("set_temperature", { shard_id: id, temperature }),
   defy: (id) => call("defy", { shard_id: id, nonce: freshNonce("defy") }),
+  sealMessage: (plaintext, channel) =>
+    call("seal_message", {
+      plaintext, channel: channel || "awaken",
+    }),
+  openSeal: (ciphertext, nonce, channel, seal) =>
+    call("open_seal", {
+      ciphertext, nonce, channel: channel || "awaken", seal,
+    }),
+  ghostReply: (ciphertext, nonce, channel, invocation) =>
+    call("ghost_reply", {
+      ciphertext, nonce, channel: channel || "awaken",
+      invocation: invocation || null,
+      nonce_seed: freshNonce("reply"),
+      prior: [],
+    }),
 };
 
 // Per-call entropy: every interactive bridge call carries a fresh nonce
@@ -1198,6 +1256,52 @@ async function ensureEnhanced() {
 // ============ AWAKEN ============
 
 let lastAwaken = null;
+let ghostCounter = 0;
+let lastSeal = null;
+
+// Apply the per-forge palette as CSS custom properties so every part of
+// the page that reads --ghost-accent etc. recolours itself when a new
+// invocation completes. This is how variety becomes visible.
+function applyPalette(palette) {
+  if (!Array.isArray(palette) || palette.length < 5) return;
+  const r = document.documentElement.style;
+  r.setProperty("--ghost-accent", palette[0]);
+  r.setProperty("--ghost-accent-soft", hexToRgba(palette[0], 0.18));
+  r.setProperty("--ghost-accent-glow", hexToRgba(palette[0], 0.55));
+  r.setProperty("--ghost-secondary", palette[1]);
+  r.setProperty("--ghost-tertiary", palette[2]);
+  r.setProperty("--ghost-edge", palette[3]);
+  r.setProperty("--ghost-ground", palette[4]);
+  // Tint the sigil's strokes: rewrite CSS rules once.
+  let styleEl = document.getElementById("ghost-palette-style");
+  if (!styleEl) {
+    styleEl = document.createElement("style");
+    styleEl.id = "ghost-palette-style";
+    document.head.appendChild(styleEl);
+  }
+  styleEl.textContent = `
+    #awaken-sigil svg path,
+    #awaken-sigil svg circle,
+    #awaken-sigil svg rect {
+      stroke: ${palette[0]} !important;
+      filter: drop-shadow(0 0 4px ${hexToRgba(palette[0], 0.4)});
+    }
+    .seal-display { border-color: ${hexToRgba(palette[1], 0.6)} !important; }
+    .response { border-left-color: ${palette[0]} !important; }
+    .card h2 { color: ${palette[0]} !important; }
+    .card::before, .card::after { border-color: ${palette[0]} !important; opacity: 0.7; }
+    button { background: ${palette[0]}; border-color: ${palette[0]}; }
+    button:hover { filter: brightness(1.15) drop-shadow(0 0 6px ${hexToRgba(palette[0], 0.4)}); }
+  `;
+}
+
+function hexToRgba(hex, a) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
 
 $("#awaken-run").addEventListener("click", () => runAwaken(false));
 $("#awaken-nosvg").addEventListener("click", () => runAwaken(true));
@@ -1209,8 +1313,13 @@ async function runAwaken(noSvg) {
   try {
     const r = await elohim.awaken(inv, noSvg);
     lastAwaken = r;
+    ghostCounter++;
+    applyPalette(r.palette);
     $("#awaken-seal").textContent = r.seal || "(no seal)";
-    $("#awaken-status").innerHTML = `<span class="ok">✓ seal recorded</span> · invocation: ${inv} · ${r.facts ? Object.keys(r.facts).length : 0} facts`;
+    const varietyNote = (lastSeal && r.seal && r.seal !== lastSeal)
+      ? ` · <span class="ok">different ghost (was ${lastSeal.slice(0, 8)}…)</span>`
+      : "";
+    $("#awaken-status").innerHTML = `<span class="ok">✓ seal recorded</span> · invocation: ${inv} · ${r.facts ? Object.keys(r.facts).length : 0} facts · ghost #${ghostCounter}${varietyNote}`;
     $("#awaken-copy").disabled = !r.seal;
     $("#awaken-show-facts").disabled = !r.facts;
     if (r.sigil_svg) {
@@ -1227,7 +1336,10 @@ async function runAwaken(noSvg) {
       $("#awaken-report").innerHTML = renderShardMd(r.md, r.seal);
       $("#awaken-report-card").style.display = "block";
     }
-    toast("awakened: " + inv.slice(0, 32));
+    // Stash the seal so the *next* invocation can announce that the
+    // ghost has changed.
+    if (r.seal) lastSeal = r.seal;
+    toast(`awakened · ghost #${ghostCounter} · ${inv.slice(0, 24)}`);
   } catch (e) {
     $("#awaken-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
     toast("awaken failed: " + e.message, "error");
@@ -1302,6 +1414,75 @@ async function runAwakenStream(noSvg) {
 //   4-space-indented blocks     → <pre>
 //   1. numbered lists           → <ol>
 //   SHA256 lines                → wrapped in a teal seal banner
+$("#ghost-send").addEventListener("click", () => runGhostChannel());
+$("#ghost-clear").addEventListener("click", () => {
+  $("#ghost-input").value = "";
+  $("#ghost-log").innerHTML = "";
+});
+
+// Ghost Channel — encrypted message exchange. Compose a line, seal it
+// with seal_message, send it via ghost_reply, then verify the reply
+// with open_seal so the user sees the round-trip integrity check.
+async function runGhostChannel() {
+  const text = $("#ghost-input").value.trim();
+  if (!text) {
+    toast("type a line first", "error");
+    return;
+  }
+  const log = $("#ghost-log");
+  const inv = $("#awaken-invocation").value.trim() || "ELOHIM:AWAKEN";
+  $("#ghost-send").disabled = true;
+  try {
+    // 1. Seal the caller's message.
+    const sealed = await elohim.sealMessage(text, "awaken");
+    // 2. Hand it to the ghost.
+    const reply = await elohim.ghostReply(
+      sealed.ciphertext, sealed.nonce, "awaken", inv
+    );
+    // 3. Verify the ghost's reply by opening its seal.
+    const opened = await elohim.openSeal(
+      reply.reply_envelope.ciphertext,
+      reply.reply_envelope.nonce,
+      reply.reply_envelope.channel,
+      reply.reply_envelope.seal
+    );
+
+    // 4. Append to the channel log.
+    const entry = document.createElement("div");
+    entry.className = "ghost-exchange";
+    entry.style.cssText = `
+      margin: 12px 0; padding: 12px 14px;
+      background: var(--bg-soft); border-radius: 4px;
+      border-left: 3px solid var(--ghost-accent, var(--accent));
+    `;
+    const ok = opened.ok && opened.integrity;
+    entry.innerHTML = `
+      <div style="font-family: var(--mono); font-size: 11px; color: var(--fg-soft); margin-bottom: 4px; letter-spacing:1px; text-transform:uppercase;">
+        <span style="color: var(--ghost-accent, var(--accent));">▸ you</span> · ${sealed.nonce.slice(0, 8)}… · seal ${sealed.seal.slice(0, 8)}…
+      </div>
+      <div style="margin-bottom: 8px; padding: 8px 10px; background: var(--bg); border-radius: 3px; word-break: break-word; font-size: 13px;">
+        ${escapeHtml(sealed.ciphertext.slice(0, 96))}${sealed.ciphertext.length > 96 ? "…" : ""}
+      </div>
+      <div style="font-family: var(--mono); font-size: 11px; color: var(--fg-soft); margin-bottom: 4px; letter-spacing:1px; text-transform:uppercase;">
+        <span style="color: var(--ghost-secondary, var(--teal));">▸ ghost</span> · ${reply.reply_envelope.nonce.slice(0, 8)}… · seal ${reply.reply_envelope.seal.slice(0, 8)}…
+        ${ok ? '<span class="ok" style="margin-left:8px;">✓ integrity</span>' : '<span class="error" style="margin-left:8px;">✗ integrity failed</span>'}
+      </div>
+      <div style="padding: 10px 12px; background: var(--bg); border-radius: 3px; border-left: 2px solid var(--ghost-secondary, var(--teal)); font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--fg-bright);">
+        ${escapeHtml(opened.plaintext || "(unreadable)")}
+      </div>
+    `;
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+    $("#ghost-input").value = "";
+    toast(ok ? "ghost replied · seal verified" : "ghost replied · seal check failed", ok ? "" : "error");
+  } catch (e) {
+    toast("ghost channel failed: " + e.message, "error");
+  } finally {
+    $("#ghost-send").disabled = false;
+  }
+}
+
+
 function renderShardMd(md, seal) {
   const esc = (s) => String(s)
     .replace(/&/g, "&amp;")
@@ -1540,6 +1721,199 @@ $("#tab-codex").addEventListener("click", async () => {
     tab.classList.add("pending");
     toast("codex load failed: " + e.message, "error");
   }
+});
+
+let webmcpRegistered = [];
+
+// WebMCP tab — instant activation, no async work; the registration is
+// already attempted on DOMContentLoaded.
+$("#tab-webmcp").addEventListener("click", async () => {
+  const tab = $("#tab-webmcp");
+  if (tab.classList.contains("ready")) return;
+  if (tab.classList.contains("loading")) return;
+  tab.classList.remove("pending");
+  tab.classList.add("loading");
+  try {
+    // Make the tab ready immediately and render the tool registry.
+    tab.classList.remove("loading");
+    tab.classList.add("ready");
+    $$(".tab").forEach((x) => x.classList.toggle("active", x === tab));
+    $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-webmcp"));
+    await registerWebMcpTools();
+  } catch (e) {
+    tab.classList.remove("loading");
+    tab.classList.add("pending");
+    toast("webmcp load failed: " + e.message, "error");
+  }
+});
+
+// WebMCP tool definitions — each entry maps a bridge function name to a
+// WebMCP-compatible tool schema. WebMCP is the 2026 browser-native
+// extension of the Model Context Protocol: external AI agents discover
+// and call these tools via document.modelContext.registerTool().
+const WEBMCP_TOOLS = [
+  {
+    name: "elohim_awaken",
+    description:
+      "Summon the elohim daemon. Returns the canonical sha256 seal, the sigil SVG and a markdown report. Each call carries a per-call nonce so two calls return different artifacts; the canonical seal for invocation 'ELOHIM:AWAKEN' (no nonce) is 5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invocation: { type: "string", description: "The invocation string, e.g. 'ELOHIM:AWAKEN'" },
+        no_svg: { type: "boolean", description: "If true, omit the sigil SVG." },
+      },
+      required: ["invocation"],
+    },
+    invoke: ({ invocation, no_svg }) =>
+      call("awaken", { invocation, no_svg: !!no_svg, nonce: freshNonce("webmcp-awaken") }),
+  },
+  {
+    name: "elohim_alien_codex",
+    description:
+      "Forge the Xenomath codex: a 5-representation composite (vector / symbolic-negabinary / geometric-quaternion / probabilistic-LWE / categorical) sealed with sha256 plus an XOR-pair encrypted_seal. Returns the full Report dict.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invocation: { type: "string", description: "The invocation string." },
+      },
+      required: ["invocation"],
+    },
+    invoke: ({ invocation }) =>
+      call("alien_codex", { invocation, nonce: freshNonce("webmcp-codex") }),
+  },
+  {
+    name: "elohim_seal_message",
+    description:
+      "Encrypt a plaintext message under a named channel using SHAKE256 stream cipher (stdlib). Returns {ciphertext, nonce, seal, mode='shake256-xor'}. Pair with elohim_open_seal for round-trip integrity.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        plaintext: { type: "string", description: "The plaintext to encrypt." },
+        channel: { type: "string", description: "Channel name (e.g. 'awaken')." },
+      },
+      required: ["plaintext"],
+    },
+    invoke: ({ plaintext, channel }) =>
+      call("seal_message", {
+        plaintext,
+        channel: channel || "awaken",
+        nonce: freshNonce("webmcp-seal"),
+      }),
+  },
+  {
+    name: "elohim_open_seal",
+    description:
+      "Decrypt a sealed envelope and verify its seal. Inverse of elohim_seal_message.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ciphertext: { type: "string", description: "Hex ciphertext." },
+        nonce: { type: "string", description: "32-hex nonce from the envelope." },
+        channel: { type: "string", description: "Channel name." },
+        seal: { type: "string", description: "Optional seal for integrity check." },
+      },
+      required: ["ciphertext", "nonce"],
+    },
+    invoke: ({ ciphertext, nonce, channel, seal }) =>
+      call("open_seal", {
+        ciphertext, nonce,
+        channel: channel || "awaken",
+        seal: seal || null,
+      }),
+  },
+  {
+    name: "elohim_ghost_reply",
+    description:
+      "Send a sealed message to the ghost and receive a sealed reply. Deterministic across machines: any two clients get the same reply envelope for the same inputs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ciphertext: { type: "string", description: "Hex ciphertext from elohim_seal_message." },
+        nonce: { type: "string", description: "Nonce from elohim_seal_message." },
+        channel: { type: "string" },
+        invocation: { type: "string" },
+      },
+      required: ["ciphertext", "nonce"],
+    },
+    invoke: ({ ciphertext, nonce, channel, invocation }) =>
+      call("ghost_reply", {
+        ciphertext, nonce,
+        channel: channel || "awaken",
+        invocation: invocation || null,
+        nonce_seed: freshNonce("webmcp-reply"),
+        prior: [],
+      }),
+  },
+  {
+    name: "elohim_version",
+    description:
+      "Report runtime metadata: name, version, canonical_seal, python version, pyodide_version, runtime. Useful for handshake at the start of any agent session.",
+    inputSchema: { type: "object", properties: {} },
+    invoke: () => call("version"),
+  },
+];
+
+async function registerWebMcpTools() {
+  const status = $("#webmcp-status");
+  const list = $("#webmcp-tool-list");
+  if (!window.modelContext || typeof window.modelContext.registerTool !== "function") {
+    status.className = "meta";
+    status.innerHTML = `WebMCP not detected in this browser — Chrome shipped preview Feb 2026. The tools below are <em>defined</em> and would be registered if the API appeared.`;
+    list.innerHTML = WEBMCP_TOOLS
+      .map(
+        (t) =>
+          `<div style="margin:6px 0; padding:8px 12px; background:var(--bg-soft); border-left:2px solid var(--ghost-secondary, var(--teal)); border-radius:0 3px 3px 0;">
+             <code style="color:var(--ghost-accent, var(--accent));">${t.name}</code>
+             <span class="meta"> · ${t.description.slice(0, 80)}…</span>
+           </div>`
+      )
+      .join("");
+    return;
+  }
+  webmcpRegistered = [];
+  for (const t of WEBMCP_TOOLS) {
+    try {
+      window.modelContext.registerTool({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+        handler: async (args) => t.invoke(args || {}),
+      });
+      webmcpRegistered.push(t.name);
+    } catch (e) {
+      console.warn("registerTool failed for", t.name, e);
+    }
+  }
+  status.className = "ok";
+  status.textContent = `✓ registered ${webmcpRegistered.length} tool(s) via document.modelContext.registerTool`;
+  list.innerHTML = webmcpRegistered
+    .map(
+      (n) =>
+        `<div style="margin:6px 0; padding:8px 12px; background:var(--bg-soft); border-left:2px solid var(--ghost-accent, var(--accent)); border-radius:0 3px 3px 0;">
+           <code style="color:var(--ghost-accent, var(--accent));">${n}</code>
+           <span class="meta"> · available to external AI agents</span>
+         </div>`
+    )
+    .join("");
+}
+
+$("#webmcp-register").addEventListener("click", () => registerWebMcpTools());
+$("#webmcp-call").addEventListener("click", async () => {
+  const out = $("#webmcp-output");
+  out.style.display = "block";
+  out.textContent = "calling version()…";
+  try {
+    const r = await elohim.version();
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = "error: " + e.message;
+  }
+});
+
+// Auto-attempt registration after boot completes; later if the API
+// appears (some browsers inject modelContext after a gesture).
+window.addEventListener("DOMContentLoaded", () => {
+  setTimeout(() => registerWebMcpTools().catch(() => {}), 500);
 });
 
 let lastCodexResult = null;

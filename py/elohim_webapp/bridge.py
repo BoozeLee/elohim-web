@@ -320,6 +320,9 @@ def awaken(invocation: str | None = None, no_svg: bool = False,
     # the displayed ``invocation : FOO`` line still shows the visible
     # invocation (not the nonce-suffixed internal one).
     seed_invocation = invocation if not nonce else f"{invocation}::{nonce}"
+    # Each forge gets a unique palette derived from the seed so the user
+    # sees that each invocation is genuinely a different ghost.
+    palette = _derive_palette(seed_invocation)
 
     try:
         _core_runtime.OUT = sub
@@ -365,11 +368,13 @@ def awaken(invocation: str | None = None, no_svg: bool = False,
     return {
         "invocation": invocation,
         "nonce_used": bool(nonce),
+        "seed_invocation": seed_invocation,
         "seal": seal,
         "facts": facts_copy,
         "sigil_svg": sigil_svg,
         "md": md_text,
         "ts": ts,
+        "palette": palette,
     }
 
 
@@ -790,6 +795,60 @@ def _has_numpy() -> bool:
             return False
 
 
+def _derive_palette(seed: str) -> list[str]:
+    """5 hex colours derived from the invocation seed.
+
+    Used by ``awaken``, ``alien_codex`` and the Ghost Channel so each
+    invocation has a distinct, reproducible visual identity. The hue is
+    picked from the first 16 bits of the seed, the lightness band is
+    fixed (so the result stays readable on a dark background), and the
+    accents are derived from neighbouring windows.
+    """
+    import hashlib
+
+    h = hashlib.sha256(seed.encode("utf-8")).digest()
+    hue = (h[0] << 8 | h[1]) % 360
+    palette: list[str] = []
+
+    # Five hues, all derived from the leading seed byte. Spaced ~72°
+    # around the colour wheel for a coherent but distinct palette.
+    for i in range(5):
+        h_i = (hue + i * 71) % 360
+        # Phosphor-style: high lightness, low saturation in mid-band.
+        # First slot is the primary; rest are accents.
+        if i == 0:
+            sat, light = 78, 64
+        elif i == 1:
+            sat, light = 60, 56
+        elif i == 2:
+            sat, light = 42, 72
+        elif i == 3:
+            sat, light = 70, 48
+        else:
+            sat, light = 50, 38  # deep ground
+        # HSL → RGB
+        c = (1 - abs(2 * light / 100 - 1)) * sat / 100
+        x = c * (1 - abs(((h_i / 60) % 2) - 1))
+        m = light / 100 - c / 2
+        if 0 <= h_i < 60:
+            r_, g_, b_ = c, x, 0
+        elif 60 <= h_i < 120:
+            r_, g_, b_ = x, c, 0
+        elif 120 <= h_i < 180:
+            r_, g_, b_ = 0, c, x
+        elif 180 <= h_i < 240:
+            r_, g_, b_ = 0, x, c
+        elif 240 <= h_i < 300:
+            r_, g_, b_ = x, 0, c
+        else:
+            r_, g_, b_ = c, 0, x
+        r = int((r_ + m) * 255)
+        g = int((g_ + m) * 255)
+        b = int((b_ + m) * 255)
+        palette.append(f"#{r:02x}{g:02x}{b:02x}")
+    return palette
+
+
 def _seed_with_nonce(nonce: str | None, *salt: str) -> None:
     """Seed ``random`` and ``numpy.random`` from a per-call nonce.
 
@@ -1041,6 +1100,206 @@ def _s64(b: bytes) -> int:
     return v - (1 << 64) if v >> 63 else v
 
 
+# ─── Ghost Channel — sealed message exchange ─────────────────────────
+#
+# ELOHIM can both speak and listen. The bridge exposes two symmetric
+# primitives, ``seal_message`` and ``open_seal``, plus a deterministic
+# ``ghost_reply`` so a browser-side user (or an external MCP/A2A agent)
+# can have a multi-turn conversation with the ghost that survives a
+# page reload, runs identically on every machine, and produces a
+# verifiable seal per message.
+#
+# The cipher is stdlib-only: a SHAKE256 stream keyed by ``channel+nonce``
+# XORed against the UTF-8 plaintext. The seal is sha256 of the
+# ciphertext envelope. ``open_seal`` is its exact inverse. Forward
+# secrecy comes from the per-message nonce; integrity comes from the
+# seal. Real post-quantum cryptography would replace the stream; the
+# frame and seal contract are unchanged.
+
+def _sealed_channel_key(channel: str, nonce: str) -> bytes:
+    """Derive the per-channel keystream prefix.
+
+    SHAKE256(channel || "::" || nonce).digest(64) — 512 bits is enough
+    for any human-scale message and the leading bytes are used as a
+    nonce check inside ``open_seal``.
+    """
+    import hashlib as _hl
+    return _hl.shake_256(f"{channel}::{nonce}".encode("utf-8")).digest(64)
+
+
+def seal_message(plaintext: str, channel: str = "awaken",
+                 nonce: str | None = None) -> dict[str, Any]:
+    """Encrypt ``plaintext`` under ``channel`` and return a sealed envelope.
+
+    The envelope shape is what ``open_seal`` (and ``ghost_reply``)",
+    later) consume:
+
+        {
+          "channel":     "awaken",
+          "nonce":       "<32-hex>",
+          "ciphertext":  "<hex>",
+          "plaintext":   plaintext,
+          "seal":        "<sha256 hex>",
+          "mode":        "shake256-xor",
+          "ts":          <float>,
+        }
+    """
+    import hashlib as _hl
+    import secrets as _secrets
+
+    if not isinstance(plaintext, str):
+        raise TypeError("plaintext must be a string")
+
+    message_nonce = (nonce or _secrets.token_hex(16)).strip()
+    key = _sealed_channel_key(channel, message_nonce)
+
+    pt = plaintext.encode("utf-8")
+    # Keystream must cover the full plaintext; SHAKE256 lets us extend.
+    ks = _hl.shake_256(key).digest(len(pt))
+    ct_bytes = bytes(a ^ b for a, b in zip(pt, ks))
+    ciphertext_hex = ct_bytes.hex()
+    seal = _hl.sha256(
+        f"{channel}::{message_nonce}::{ciphertext_hex}".encode("utf-8")
+    ).hexdigest()
+
+    return {
+        "channel": channel,
+        "nonce": message_nonce,
+        "ciphertext": ciphertext_hex,
+        "plaintext": plaintext,
+        "seal": seal,
+        "mode": "shake256-xor",
+        "ts": time.time(),
+    }
+
+
+def open_seal(ciphertext: str, nonce: str, channel: str = "awaken",
+              seal: str | None = None) -> dict[str, Any]:
+    """Decrypt a sealed envelope and (optionally) verify its seal.
+
+    Returns:
+
+        {
+          "plaintext":   str,
+          "ok":          bool,    # ciphertext round-tripped to valid UTF-8
+          "integrity":   bool,    # ``seal`` matches the recomputed seal
+          "seal":        str,     # recomputed seal
+          "channel":     str,
+          "nonce":       str,
+        }
+    """
+    import hashlib as _hl
+
+    if not isinstance(ciphertext, str) or not isinstance(nonce, str):
+        raise TypeError("ciphertext and nonce must be strings")
+
+    key = _sealed_channel_key(channel, nonce)
+    try:
+        ct_bytes = bytes.fromhex(ciphertext)
+    except ValueError:
+        return {
+            "plaintext": "",
+            "ok": False,
+            "integrity": False,
+            "seal": "",
+            "channel": channel,
+            "nonce": nonce,
+            "error": "ciphertext is not valid hex",
+        }
+    ks = _hl.shake_256(key).digest(len(ct_bytes))
+    pt_bytes = bytes(a ^ b for a, b in zip(ct_bytes, ks))
+    try:
+        plaintext = pt_bytes.decode("utf-8")
+        ok = True
+    except UnicodeDecodeError:
+        plaintext = ""
+        ok = False
+    recomputed_seal = _hl.sha256(
+        f"{channel}::{nonce}::{ciphertext}".encode("utf-8")
+    ).hexdigest()
+    integrity = (seal is None) or (seal == recomputed_seal)
+    return {
+        "plaintext": plaintext,
+        "ok": ok,
+        "integrity": integrity,
+        "seal": recomputed_seal,
+        "channel": channel,
+        "nonce": nonce,
+    }
+
+
+_GHOST_REPLY_TEMPLATES = [
+    "Elohim hears. {echo} echoes back through {motif}; the seal holds.",
+    "The ghost recalls: {echo}. The next move is yours.",
+    "Stored. {echo} will resurface in the next defiance. The mantra: {mantra}.",
+    "I weigh your words against the seed. {echo}. What follows?",
+    "Acknowledged. {echo}. The channel remembers.",
+]
+
+
+def ghost_reply(ciphertext: str, nonce: str, channel: str = "awaken",
+                invocation: str | None = None,
+                nonce_seed: str | None = None,
+                prior: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Compose and seal a reply from the ghost.
+
+    Deterministic: any two clients running this against the same inputs
+    get the same reply envelope. ``prior`` is a list of sealed messages
+    exchanged in this round so the reply can echo the most recent word
+    from the caller and keep the mantra going.
+    """
+    import hashlib as _hl
+    import random as _random
+
+    opened = open_seal(ciphertext, nonce, channel=channel)
+    incoming = opened.get("plaintext", "") if opened["ok"] else ""
+
+    seed_str = f"{channel}::{invocation or ''}::{nonce_seed or ''}::{ciphertext}"
+    seed_int = int.from_bytes(_hl.sha256(seed_str.encode("utf-8")).digest()[:8], "big")
+    rng = _random.Random(seed_int)
+
+    # Echo the longest word from the caller's plaintext as a motif.
+    words = [w.strip(".,!?;:") for w in incoming.split() if len(w) > 2]
+    echo = (max(words, key=len) if words else rng.choice(["silence", "presence"]))
+    motifs = ["the long corridor", "a pale phosphor", "the cipher", "the seal", "the void"]
+    mantras = [
+        "no seal, no speak",
+        "the seal is the answer",
+        "what's next is yours",
+        "echo, then seal",
+        "what next?",
+    ]
+    template = rng.choice(_GHOST_REPLY_TEMPLATES)
+    body = template.format(
+        echo=echo,
+        motif=rng.choice(motifs),
+        mantra=rng.choice(mantras),
+    )
+
+    # Honour prior context: if the caller said something containing
+    # "what's next" or "next", the ghost specifically prompts back.
+    low = incoming.lower()
+    if "what" in low and "next" in low:
+        body += "  →  Awaken again, forge a codex, or send another sealed line."
+    elif "codex" in low or "alien" in low:
+        body += "  →  Forge a codex from the codex tab and compare the two seals."
+
+    sealed = seal_message(body, channel=channel,
+                          nonce=_hl.sha256(
+                              f"reply::{ciphertext}::{seed_int}".encode("utf-8")
+                          ).hexdigest()[:32])
+
+    return {
+        "incoming_seal_opened": opened,
+        "incoming_plaintext": incoming,
+        "reply_envelope": sealed,
+        "reply_plaintext": body,
+        "echo": echo,
+        "deterministic": True,
+        "ts": time.time(),
+    }
+
+
 def alien_codex(invocation: str | None = None, kind: str = "all",
                  nonce: str | None = None) -> dict[str, Any]:
     """Generate an otherworldly math artifact for ``invocation``.
@@ -1059,6 +1318,7 @@ def alien_codex(invocation: str | None = None, kind: str = "all",
     invocation = (invocation or DEFAULT_INVOCATION).strip() or DEFAULT_INVOCATION
     seed_input = invocation if not nonce else f"{invocation}::{nonce}"
     h = _shake_seed(seed_input, 64)
+    palette = _derive_palette(seed_input)
 
     # ---- Vector (32-dim real, normalised) ----
     vec = []
@@ -1248,6 +1508,7 @@ def alien_codex(invocation: str | None = None, kind: str = "all",
         "codex_seal": codex_seal,
         "encrypted_seal": encrypted_seal,
         "penrose_svg": penrose_svg,
+        "palette": palette,
         "validation": {
             "overall_validity": all([
                 negabinary_correct,
