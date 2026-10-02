@@ -392,6 +392,30 @@ def main() -> int:
         assert bad["result"]["isError"] is True
         print(f"  mcp error path: isError={bad['result']['isError']}")
 
+        # Vision panel (Push 9): vision_for returns a Pollinations URL
+        # composed from the seal; same seal -> same URL.
+        v1 = page.evaluate(
+            f"window.elohim.vision({repr(result['invocation'])}, "
+            f"{repr(result['seal'])}, {repr(result['palette'])})"
+        )
+        v2 = page.evaluate(
+            f"window.elohim.vision({repr(result['invocation'])}, "
+            f"{repr(result['seal'])}, {repr(result['palette'])})"
+        )
+        assert v1["url"] == v2["url"], "same seal must yield same vision URL"
+        assert v1["url"].startswith("https://image.pollinations.ai/prompt/")
+        assert "?width=576&height=1024" in v1["url"]
+        assert len(v1["prompt"]) > 60
+        print(f"  vision url: {v1['url'][:80]}…")
+        print(f"  vision prompt ({len(v1['prompt'])} chars): {v1['prompt'][:80]}…")
+        # Different seal -> different URL.
+        v3 = page.evaluate(
+            f"window.elohim.vision({repr(result['invocation'])}, "
+            f"{repr(result2['seal'])}, {repr(result2['palette'])})"
+        )
+        assert v1["url"] != v3["url"], "different seals must yield different vision URLs"
+        print(f"  vision variety: seal A vs seal B → different URLs ✓")
+
         browser.close()
     return 0
 

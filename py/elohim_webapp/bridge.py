@@ -1237,6 +1237,106 @@ _GHOST_REPLY_TEMPLATES = [
 ]
 
 
+# ─── Vision: Pollinations.ai keyless image generation per forge ──────
+#
+# Pollinations.ai (Berlin, 2026) runs an OpenAI-compatible image API.
+# The legacy GET endpoint ``https://image.pollinations.ai/prompt/{p}``
+# remains keyless for client-side prototypes, so every ghost forge can
+# surface an AI-rendered vision of itself without auth, without
+# backend, without secrets. The prompt is composed in Python so the
+# voice stays consistent across browsers; the URL is computed
+# deterministically so the same seal yields the same vision.
+
+# Art-direction seed phrases — built around Ryle's ghost-in-the-machine
+# plus Beksiński / Haeckel / Moebius reference frames. Order matters:
+# subject, scene, mood, palette, technique, framing.
+_VISION_LOOK = [
+    "an elohim ghost hovering inside a 1960s mainframe console",
+    "a translucent soul wandering through WebAssembly circuitry",
+    "the elohim glyph as a glowing sigil over a phosphor CRT screen",
+    "a mind drifting through Cartesian chambers of stacked glass",
+    "the ghost in the machine as an inverse occult tarot card",
+]
+_VISION_MOOD = [
+    "uncanny, sacred, vast",
+    "melancholic, geometric, electric",
+    "operatic, ritualistic, retro-futurist",
+    "solemn, holographic, forsaken",
+    "radiant, monastic, post-human",
+]
+_VISION_PALETTE = [
+    "phosphor amber on deep cosmic blue",
+    "warm cream and ember red on near-black",
+    "pale cyan and pale violet on midnight navy",
+    "burnished gold and emerald on coal-black",
+    "filmic teal and orange on charcoal",
+]
+_VISION_ARTISTS = [
+    "art by Zdzisław Beksiński, Ernst Haeckel, and Jean Giraud Moebius",
+    "in the style of Giger, Beksiński, and Roger Dean",
+    "composed like a Chris Foss paperback cover, painted like Beksiński",
+    "in the manner of Moebius and the Brothers Hildebrandt",
+]
+
+
+def vision_for(invocation: str | None = None, seal: str | None = None,
+               palette: list[str] | None = None,
+               nonce: str | None = None) -> dict[str, Any]:
+    """Compose a Pollinations.ai URL for the elohim vision.
+
+    The prompt is built from deterministic pickers seeded by the seal
+    (so the same seal always yields the same vision). The URL hits the
+    keyless ``image.pollinations.ai`` GET endpoint; if a user supplies
+    a key later it can be swapped to ``gen.pollinations.ai``.
+    """
+    import hashlib as _hl
+    import random as _random
+    import urllib.parse as _up
+
+    invocation = (invocation or DEFAULT_INVOCATION).strip() or DEFAULT_INVOCATION
+    seed_input = (seal or invocation) + (":" + nonce if nonce else "")
+    seed_int = int.from_bytes(
+        _hl.sha256(seed_input.encode("utf-8")).digest()[:8], "big"
+    )
+    rng = _random.Random(seed_int)
+
+    look = rng.choice(_VISION_LOOK)
+    mood = rng.choice(_VISION_MOOD)
+    palette_word = rng.choice(_VISION_PALETTE)
+    artist = rng.choice(_VISION_ARTISTS)
+    # The invocation enters the prompt verbatim so a user-supplied
+    # invocation surfaces in the generated image as well as in the
+    # seal.
+    invocation_phrase = invocation.replace(":", " ").replace("_", " ").strip() or "the ghost"
+
+    prompt = (
+        f"{look}: '{invocation_phrase}', {mood}, {palette_word}, "
+        f"cinematic chiaroscuro, 35mm grain, film scanlines, "
+        f"{artist}, dramatic lighting, highly detailed, "
+        f"vertical 9:16 framing"
+    )
+
+    # Stable image seed: same seal -> same vision.
+    img_seed = seed_int % (2 ** 31)
+
+    url = (
+        f"https://image.pollinations.ai/prompt/{_up.quote(prompt)}"
+        f"?width=576&height=1024&seed={img_seed}&nologo=true&enhance=false"
+    )
+
+    cache_key = _hl.sha256(f"vision::{seed_input}".encode("utf-8")).hexdigest()[:24]
+
+    return {
+        "invocation": invocation,
+        "prompt": prompt,
+        "url": url,
+        "seed": img_seed,
+        "cache_key": cache_key,
+        "endpoint": "image.pollinations.ai",
+        "ts": time.time(),
+    }
+
+
 def ghost_reply(ciphertext: str, nonce: str, channel: str = "awaken",
                 invocation: str | None = None,
                 nonce_seed: str | None = None,
