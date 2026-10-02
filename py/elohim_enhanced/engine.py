@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Tuple
 
-from ._deps import get_numpy
+from .extras import get_numpy
 
 np = get_numpy()
 logger = logging.getLogger("ElohimShard")

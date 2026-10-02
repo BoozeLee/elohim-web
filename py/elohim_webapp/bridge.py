@@ -19,6 +19,13 @@ Seal tripwire: ``version()`` reads back the seal produced by a fresh
 ``elohim_summoning`` invocation and refuses to advertise the release
 if it doesn't match ``CANONICAL_SEAL``.  This is the cross-runtime
 guarantee the monorepo ships with.
+
+Namespace-package note: GitHub Pages refuses to serve files starting with
+``_``, so we ship *no* ``__init__.py``. Python 3.12+ treats directories
+without ``__init__.py`` as PEP 420 namespace packages, so ``import
+elohim_summoning.cli`` still resolves. The bridge reaches into the
+submodules directly (no top-level re-exports) to avoid touching the
+missing ``__init__.py``.
 """
 
 from __future__ import annotations
@@ -32,6 +39,8 @@ from typing import Any
 
 CANONICAL_SEAL = "5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596"
 DEFAULT_INVOCATION = "ELOHIM:AWAKEN"
+SUMMONING_VERSION = "0.2.0"  # mirrors elohim_summoning/__init__.py
+ENHANCED_VERSION = "0.2.0"   # mirrors elohim_enhanced/__init__.py
 
 # MEMFS root for ephemeral awaken artifacts.
 _OUT_ROOT = Path("/tmp/elohim-out")
@@ -107,21 +116,19 @@ def version() -> dict[str, Any]:
     """Server-side metadata + canonical seal tripwire."""
     import sys
 
-    import elohim_summoning
-    from elohim_summoning import __version__ as sum_v
-
     try:
-        import elohim_enhanced
-        from elohim_enhanced import __version__ as enh_v
-        enhanced_version = enh_v
+        import elohim_enhanced  # noqa: F401 — PEP 420 namespace package probe
+
+        import numpy as _np_check
+        enhanced_version = ENHANCED_VERSION
         enhanced_available = True
     except ImportError:
-        enhanced_version = None
+        enhanced_version = ENHANCED_VERSION
         enhanced_available = False
 
     return {
         "name": "elohim-summoning",
-        "version": sum_v,
+        "version": SUMMONING_VERSION,
         "enhanced_version": enhanced_version,
         "python": sys.version.split()[0],
         "canonical_seal": CANONICAL_SEAL,
@@ -326,7 +333,7 @@ def _rehydrate_shard(payload: dict[str, Any]) -> Any:
     """Build a fully-populated ElohimShardEnhanced from a JSON snapshot."""
     import numpy as np
 
-    from elohim_enhanced import ElohimShardEnhanced
+    from elohim_enhanced.shard import ElohimShardEnhanced
     from elohim_enhanced.types import Memory
 
     shard = ElohimShardEnhanced(
@@ -483,7 +490,7 @@ def create_shard(name: str = "Elohim", temperature: float = 1.0) -> dict[str, An
         raise RuntimeError(
             "numpy is not available; Pyodide should ship it but something went wrong"
         )
-    from elohim_enhanced import ElohimShardEnhanced
+    from elohim_enhanced.shard import ElohimShardEnhanced
 
     shard_id = new_shard_id()
     shard = ElohimShardEnhanced(name=name, temperature=temperature)

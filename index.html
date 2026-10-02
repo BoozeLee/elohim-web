@@ -265,17 +265,17 @@ async function bootPyodide() {
   ];
   const filesPerPkg = {
     elohim_summoning: [
-      "__init__.py", "cli.py", "core.py", "sigil.py",
+      "cli.py", "core.py", "sigil.py",
       "collatz.py", "logstar.py", "padic.py", "parry.py",
-      "pisot.py", "unicorn.py", "__main__.py",
+      "pisot.py", "unicorn.py",
     ],
     elohim_enhanced: [
-      "__init__.py", "_deps.py", "cli.py", "creative.py",
+      "extras.py", "cli.py", "creative.py",
       "engine.py", "memory.py", "reflection.py", "shard.py",
-      "types.py", "__main__.py",
+      "types.py",
     ],
     elohim_webapp: [
-      "__init__.py", "bridge.py",
+      "bridge.py",
     ],
   };
 
@@ -315,7 +315,6 @@ import elohim_webapp.bridge as bridge
   boot.setStatus("loading numpy (one-time, ~5MB)…", 88);
   await localPyodide.loadPackagesFromImports("import numpy");
   await localPyodide.runPythonAsync(`
-import elohim_enhanced
 import elohim_enhanced.cli
 import elohim_enhanced.creative
 import elohim_enhanced.engine
@@ -323,7 +322,7 @@ import elohim_enhanced.memory
 import elohim_enhanced.reflection
 import elohim_enhanced.shard
 import elohim_enhanced.types
-import elohim_enhanced._deps
+import elohim_enhanced.extras
 `);
   localPyodide.__elohim_numpy_loaded = true;
 

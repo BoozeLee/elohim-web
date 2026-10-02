@@ -82,7 +82,7 @@ class ElohimShardEnhanced:
                 self.neural_engine.adjust_temperature(new_temp)
             if "learning_rate" in adjustments:
                 self.neural_engine.learning_rate += adjustments["learning_rate"]
-                from ._deps import get_numpy
+                from .extras import get_numpy
                 self.neural_engine.learning_rate = float(
                     get_numpy().clip(self.neural_engine.learning_rate, 0.01, 0.5)
                 )

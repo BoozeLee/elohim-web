@@ -13,7 +13,7 @@ import time
 from collections import deque
 from typing import List, Optional
 
-from ._deps import get_numpy
+from .extras import get_numpy
 from .types import Memory
 
 np = get_numpy()

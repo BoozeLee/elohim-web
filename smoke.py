@@ -13,7 +13,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-URL = f"http://127.0.0.1:8780/?nocache={int(time.time())}"
+URL = f"https://boozelee.github.io/elohim-web/?nocache={int(time.time())}"
 CANONICAL_SEAL = "5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596"
 
 

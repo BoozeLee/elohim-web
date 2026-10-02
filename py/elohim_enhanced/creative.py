@@ -10,7 +10,7 @@ import logging
 import random
 from typing import List, Tuple
 
-from ._deps import get_numpy
+from .extras import get_numpy
 
 np = get_numpy()
 logger = logging.getLogger("ElohimShard")

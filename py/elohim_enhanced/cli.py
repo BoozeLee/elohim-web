@@ -9,7 +9,7 @@ import argparse
 import random
 import time
 
-from ._deps import get_numpy  # noqa: F401 — fail-fast if numpy missing
+from .extras import get_numpy  # noqa: F401 — fail-fast if numpy missing
 from .shard import ElohimShardEnhanced
 
 logger = __import__("logging").getLogger("ElohimShard")

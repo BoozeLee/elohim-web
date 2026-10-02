@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
-from ._deps import get_numpy
+from .extras import get_numpy
 
 np = get_numpy()
 
