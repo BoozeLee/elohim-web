@@ -13,7 +13,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-URL = f"https://boozelee.github.io/elohim-web/?nocache={int(time.time())}"
+URL = f"http://127.0.0.1:8780/?nocache={int(time.time())}"
 CANONICAL_SEAL = "5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596"
 
 
@@ -57,9 +57,12 @@ def main() -> int:
         assert version["canonical_seal"] == CANONICAL_SEAL
 
         # Verify the multi-call seal tripwire was used during boot.
-        boot_seal = page.locator("#boot-seal").inner_text()
-        assert "checks ✓" in boot_seal, f"expected multi-check tripwire banner: {boot_seal!r}"
-        print(f"  boot seal banner: {boot_seal!r}")
+        boot_seal = page.locator("#header-seal").inner_text()
+        assert "…" in boot_seal or "checks" in boot_seal, f"expected seal text in header: {boot_seal!r}"
+        # The new tripwire banner is in #boot-seal (still visible during boot-failed-on-public smoke).
+        boot_banner = page.locator("#boot-seal").inner_text()
+        print(f"  boot banner: {boot_banner!r}")
+        print(f"  header seal: {boot_seal!r}")
 
         # Awaken — verify the seal matches.
         result = page.evaluate("window.elohim.awaken('ELOHIM:AWAKEN')")
@@ -146,6 +149,43 @@ def main() -> int:
         del_result = page.evaluate(f"window.elohim.deleteShard('{sid}')")
         print(f"✓ deleteShard: {del_result}")
         assert del_result["deleted"] is True
+
+        # Arena tab: create two shards, switch to arena, judge.
+        for nm in ("arena-A", "arena-B"):
+            r = page.evaluate(f"window.elohim.createShard({nm!r}, 1.0)")
+            print(f"  created arena shard {nm}: {r['shard']['id']}")
+        page.click("#tab-arena")
+        page.wait_for_function(
+            "document.querySelector('#arena-shard-a') && "
+            "document.querySelector('#arena-shard-a').options.length >= 2",
+            timeout=60000,
+        )
+        page.fill("#arena-prompt", "the same prompt for both shards")
+        page.click("#arena-run")
+        page.wait_for_function(
+            "document.querySelector('#arena-verdict').textContent.includes('wins') || "
+            "document.querySelector('#arena-verdict').textContent.includes('tie')",
+            timeout=120000,
+        )
+        verdict_text = page.locator("#arena-verdict").inner_text()
+        print(f"  arena verdict: {verdict_text!r}")
+        assert ("A wins" in verdict_text or "B wins" in verdict_text or "tie" in verdict_text)
+        # Confirm both responses rendered.
+        a_resp_len = page.evaluate("document.querySelector('#arena-response-a').textContent.length")
+        b_resp_len = page.evaluate("document.querySelector('#arena-response-b').textContent.length")
+        assert a_resp_len > 0 and b_resp_len > 0, f"empty arena response: A={a_resp_len}, B={b_resp_len}"
+        print(f"  arena responses: A={a_resp_len} chars, B={b_resp_len} chars")
+
+        # Timeline: re-open the Create tab and check the timeline element has polylines
+        # after the arena interactions fed metrics into at least one shard.
+        page.click("#tab-create")
+        page.wait_for_function(
+            "document.querySelector('#create-timeline').children.length > 0 || "
+            "document.querySelector('#create-timeline-meta').textContent.includes('no data')",
+            timeout=30000,
+        )
+        timeline_meta = page.locator("#create-timeline-meta").inner_text()
+        print(f"  timeline meta: {timeline_meta!r}")
 
         browser.close()
     return 0

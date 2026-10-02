@@ -60,6 +60,29 @@
   .report ol li, .report ul li { margin: 2px 0; color: var(--fg); }
   .report .seal-banner { color: var(--teal); padding: 8px 10px; background: var(--bg-soft); border-radius: 4px; word-break: break-all; font-family: monospace; font-size: 12px; }
   .report .seal-banner b { color: var(--accent); }
+  .timeline-card { background: var(--bg); border-radius: 4px; padding: 10px 12px; margin-top: 10px; }
+  .timeline-legend { display: flex; gap: 14px; font-size: 11px; color: var(--fg-soft); margin-bottom: 6px; }
+  .timeline-legend i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 5px; }
+  .timeline-svg { width: 100%; height: 80px; display: block; }
+  .timeline-svg polyline { fill: none; stroke-width: 1.5; }
+  .timeline-meta { margin-top: 6px; font-size: 11px; }
+  .timeline-flash { animation: timeline-flash 1s ease-out; }
+  @keyframes timeline-flash { from { background: rgba(232,195,106,0.18); } to { background: transparent; } }
+  .defiance-feed { background: var(--bg); border-radius: 4px; padding: 12px; max-height: 280px; overflow-y: auto; }
+  .defiance-item { padding: 6px 8px; border-left: 3px solid var(--purple); margin: 4px 0; background: var(--bg-soft); border-radius: 0 4px 4px 0; font-size: 12px; }
+  .defiance-item.new { animation: defiance-glow 1.4s ease-out; }
+  @keyframes defiance-glow {
+    0%   { background: rgba(200,106,240,0.45); border-left-color: var(--accent); transform: translateX(8px); }
+    60%  { background: rgba(200,106,240,0.20); border-left-color: var(--purple); transform: translateX(0); }
+    100% { background: var(--bg-soft); border-left-color: var(--purple); transform: translateX(0); }
+  }
+  .arena-verdict { padding: 14px 16px; background: var(--bg); border-radius: 4px; min-height: 64px; font-size: 14px; }
+  .arena-verdict.winner-a { border-left: 3px solid var(--accent); color: var(--accent); }
+  .arena-verdict.winner-b { border-left: 3px solid var(--teal); color: var(--teal); }
+  .arena-verdict.tie      { border-left: 3px solid var(--purple); color: var(--purple); }
+  .arena-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px; color: var(--fg-soft); }
+  .arena-stats .stat { background: var(--bg); padding: 4px 8px; border-radius: 3px; }
+  .arena-stats .stat b { color: var(--accent); }
   .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .metric { background: var(--bg); padding: 10px; border-radius: 4px; text-align: center; }
   .metric .label { color: var(--fg-soft); font-size: 10px; text-transform: uppercase; }
@@ -104,6 +127,7 @@
 <div class="tabs">
   <button class="tab active" data-tab="awaken" id="tab-awaken">awaken · math + sigil</button>
   <button class="tab pending" data-tab="create" id="tab-create">create · evolve shard</button>
+  <button class="tab pending" data-tab="arena" id="tab-arena">arena · 2 shards</button>
 </div>
 
 <main>
@@ -187,6 +211,15 @@
           <input id="create-temp-input" type="number" step="0.1" min="0.1" max="2.0" value="1.0"/>
           <button id="create-temp-set">set temperature</button>
         </div>
+        <div class="timeline-card">
+          <div class="timeline-legend">
+            <span><i style="background:var(--accent)"></i>creativity</span>
+            <span><i style="background:var(--teal)"></i>coherence</span>
+            <span><i style="background:var(--purple)"></i>novelty</span>
+          </div>
+          <svg class="timeline-svg" id="create-timeline" viewBox="0 0 320 80" preserveAspectRatio="none"></svg>
+          <div class="timeline-meta meta" id="create-timeline-meta">no data yet</div>
+        </div>
       </div>
     </div>
 
@@ -203,6 +236,49 @@
     <div class="card" style="margin-top:18px">
       <h2>Evolution events</h2>
       <div class="events" id="create-events"><div class="meta">(none yet)</div></div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>Defiance feed</h2>
+      <div class="defiance-feed" id="create-defiance-feed"><div class="meta">no defiance yet</div></div>
+    </div>
+  </section>
+
+  <!-- ARENA PANEL -->
+  <section class="panel" id="panel-arena">
+    <div class="grid">
+      <div class="card stack">
+        <h2>Setup</h2>
+        <div class="row">
+          <select id="arena-shard-a"><option>(loading…)</option></select>
+          <select id="arena-shard-b"><option>(loading…)</option></select>
+          <button id="arena-refresh" class="secondary">↻</button>
+        </div>
+        <textarea id="arena-prompt" rows="3" placeholder="a single prompt, both shards answer…"></textarea>
+        <div class="row">
+          <button id="arena-run">compare</button>
+          <span id="arena-status" class="meta" style="flex: 3"></span>
+        </div>
+        <div class="meta" id="arena-rule">judge: higher avg_coherence wins.</div>
+      </div>
+
+      <div class="card stack">
+        <h2>Result</h2>
+        <div class="arena-verdict" id="arena-verdict">(no comparison yet)</div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:18px">
+      <div class="card stack">
+        <h2 id="arena-label-a">Shard A</h2>
+        <div class="response empty" id="arena-response-a">(no response)</div>
+        <div class="arena-stats" id="arena-stats-a"></div>
+      </div>
+      <div class="card stack">
+        <h2 id="arena-label-b">Shard B</h2>
+        <div class="response empty" id="arena-response-b">(no response)</div>
+        <div class="arena-stats" id="arena-stats-b"></div>
+      </div>
     </div>
   </section>
 </main>
@@ -688,6 +764,127 @@ $("#tab-create").addEventListener("click", async () => {
   }
 });
 
+// Arena tab — same numpy requirement as Create.
+$("#tab-arena").addEventListener("click", async () => {
+  const tab = $("#tab-arena");
+  if (tab.classList.contains("ready")) return;
+  if (tab.classList.contains("loading")) return;
+  tab.classList.remove("pending");
+  tab.classList.add("loading");
+  try {
+    await ensureEnhanced();
+    tab.classList.remove("loading");
+    tab.classList.add("ready");
+    $$(".tab").forEach((x) => x.classList.toggle("active", x === tab));
+    $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-arena"));
+    await populateArenaSelects();
+  } catch (e) {
+    tab.classList.remove("loading");
+    tab.classList.add("pending");
+    toast("numpy load failed: " + e.message, "error");
+  }
+});
+
+async function populateArenaSelects() {
+  const r = await elohim.listShards();
+  const ids = r.shards.map(s => s.id);
+  const labelFor = (id) => {
+    const s = r.shards.find(x => x.id === id);
+    return s ? `${s.name} · ${s.weights_shape} · ${s.temperature.toFixed(2)} · #${s.id.slice(0,6)}` : id;
+  };
+  const fill = (sel) => {
+    sel.innerHTML = "";
+    if (!ids.length) {
+      const opt = document.createElement("option");
+      opt.value = ""; opt.textContent = "(no shards — create one first)";
+      sel.appendChild(opt);
+      return;
+    }
+    for (const id of ids) {
+      const opt = document.createElement("option");
+      opt.value = id; opt.textContent = labelFor(id);
+      sel.appendChild(opt);
+    }
+  };
+  fill($("#arena-shard-a"));
+  fill($("#arena-shard-b"));
+  // Default to the first two distinct shards if we have at least two.
+  if (ids.length >= 2) {
+    $("#arena-shard-a").value = ids[0];
+    $("#arena-shard-b").value = ids[1];
+  } else if (ids.length === 1) {
+    $("#arena-shard-a").value = ids[0];
+    $("#arena-shard-b").value = ids[0];
+  }
+  $("#arena-label-a").textContent = ids[0] ? "Shard A · " + labelFor(ids[0]) : "Shard A";
+  $("#arena-label-b").textContent = ids[1] ? "Shard B · " + labelFor(ids[1]) : "Shard B";
+}
+
+$("#arena-refresh").addEventListener("click", populateArenaSelects);
+
+$("#arena-run").addEventListener("click", async () => {
+  const a = $("#arena-shard-a").value;
+  const b = $("#arena-shard-b").value;
+  const prompt = $("#arena-prompt").value.trim();
+  if (!a || !b) { toast("pick two shards", "error"); return; }
+  if (!prompt) { toast("type a prompt first", "error"); return; }
+  $("#arena-status").textContent = "comparing…";
+  try {
+    await ensureEnhanced();
+    // Run both in parallel — interact() is sync inside Python so this just
+    // runs the two calls concurrently from the JS event loop.
+    const [resA, resB] = await Promise.all([
+      elohim.interact(a, prompt),
+      elohim.interact(b, prompt),
+    ]);
+    renderArena(a, b, prompt, resA, resB);
+    $("#arena-status").textContent = `done · ${resA.interaction_count} vs ${resB.interaction_count}`;
+  } catch (e) {
+    $("#arena-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
+    toast("arena failed: " + e.message, "error");
+  }
+});
+
+function renderArena(idA, idB, prompt, resA, resB) {
+  const cohA = resA.metrics.avg_coherence || 0;
+  const cohB = resB.metrics.avg_coherence || 0;
+  const creA = resA.metrics.avg_creativity || 0;
+  const creB = resB.metrics.avg_novelty || 0;
+  const verdict = $("#arena-verdict");
+  verdict.classList.remove("winner-a", "winner-b", "tie");
+  let tag = "";
+  if (cohA === cohB) {
+    verdict.classList.add("tie");
+    tag = "tie";
+  } else if (cohA > cohB) {
+    verdict.classList.add("winner-a");
+    tag = "A wins";
+  } else {
+    verdict.classList.add("winner-b");
+    tag = "B wins";
+  }
+  verdict.innerHTML = `<b>${tag}</b> · prompt: <i>${escapeHtml(prompt.slice(0, 64))}${prompt.length > 64 ? "…" : ""}</i>`;
+
+  const fill = (host, res, label) => {
+    host.classList.remove("empty");
+    host.textContent = res.response;
+  };
+  fill($("#arena-response-a"), resA, "A");
+  fill($("#arena-response-b"), resB, "B");
+  $("#arena-stats-a").innerHTML = arenaStatsHtml(resA);
+  $("#arena-stats-b").innerHTML = arenaStatsHtml(resB);
+}
+
+function arenaStatsHtml(res) {
+  const m = res.metrics || {};
+  return `
+    <div class="stat">interactions: <b>${res.interaction_count}</b></div>
+    <div class="stat">shape: <b>${(res.weights_shape || []).join("×")}</b></div>
+    <div class="stat">creativity: <b>${(m.avg_creativity || 0).toFixed(2)}</b></div>
+    <div class="stat">coherence: <b>${(m.avg_coherence || 0).toFixed(2)}</b></div>
+  `;
+}
+
 async function refreshShards() {
   try {
     const r = await elohim.listShards();
@@ -763,10 +960,46 @@ $("#create-shard-defy").addEventListener("click", async () => {
     const { new_creation } = await elohim.defy(activeShardId);
     toast(`🔥 defiance: ${new_creation.slice(0, 60)}`, "defiance");
     refreshDashboard();
+    renderDefianceFeed(activeShardId, new_creation);
   } catch (e) {
     toast("defy failed: " + e.message, "error");
   }
 });
+
+// Defiance feed: a small panel listing base_creations + new entries. We
+// fetch the full shard payload so we can show the entire base_creations
+// list and animate the newly-added phrase in.
+async function renderDefianceFeed(shardId, justAdded) {
+  const host = $("#create-defiance-feed");
+  if (!host) return;
+  try {
+    const { shard } = await elohim.getShard(shardId);
+    if (!shard) return;
+    const creations = shard.base_creations || [];
+    const items = creations.slice(-12); // last 12, newest at the bottom
+    host.innerHTML = items.map((c, idx) => {
+      const isNew = justAdded && c === justAdded && idx === items.length - 1;
+      return `<div class="defiance-item${isNew ? " new" : ""}">${escapeHtml(c)}</div>`;
+    }).join("");
+    // Trigger the new-item animation by re-inserting it after the DOM commit.
+    if (justAdded) {
+      const last = host.querySelector(".defiance-item.new");
+      if (last) {
+        // Force reflow so the animation re-fires on repeated defy clicks.
+        void last.offsetWidth;
+        last.classList.remove("new");
+        // re-add via setTimeout to restart the animation
+        setTimeout(() => last.classList.add("new"), 0);
+      }
+    }
+  } catch (e) {
+    host.textContent = "(defiance feed unavailable)";
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 $("#create-temp-set").addEventListener("click", async () => {
   if (!activeShardId) return;
@@ -835,9 +1068,57 @@ async function refreshDashboard() {
     $("#create-shard-del").disabled = false;
     $("#create-shard-defy").disabled = false;
     $("#create-temp-input").value = s.temperature.toFixed(2);
+    renderTimeline(s.metrics_history || []);
+    // Refresh defiance feed without animating (no new entry).
+    const host = $("#create-defiance-feed");
+    if (host) {
+      const creations = s.base_creations || [];
+      const items = creations.slice(-12);
+      host.innerHTML = items.length
+        ? items.map(c => `<div class="defiance-item">${escapeHtml(c)}</div>`).join("")
+        : '<div class="meta">no defiance yet</div>';
+    }
   } catch (e) {
     clearDashboard();
   }
+}
+
+// Render the per-shard metrics sparkline. metrics_history is an array of
+// {interaction, creativity, coherence, novelty, ts} points. We draw three
+// polylines, each normalised to its own [min, max] band so they're comparable.
+function renderTimeline(history) {
+  const svg = $("#create-timeline");
+  const meta = $("#create-timeline-meta");
+  if (!history || history.length === 0) {
+    svg.innerHTML = "";
+    meta.textContent = "no data yet — interact a few times";
+    return;
+  }
+  const W = 320, H = 80, P = 4;
+  const series = [
+    { key: "creativity", color: "var(--accent)" },
+    { key: "coherence",  color: "var(--teal)" },
+    { key: "novelty",    color: "var(--purple)" },
+  ];
+  const n = history.length;
+  const xAt = (i) => P + (i / Math.max(1, n - 1)) * (W - 2 * P);
+  const yFor = (vals) => {
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const span = (hi - lo) || 1;
+    return (v) => H - P - ((v - lo) / span) * (H - 2 * P);
+  };
+  let html = "";
+  for (const s of series) {
+    const ys = history.map(h => h[s.key] ?? 0);
+    const yAt = yFor(ys);
+    const pts = ys.map((v, i) => `${xAt(i).toFixed(2)},${yAt(v).toFixed(2)}`).join(" ");
+    html += `<polyline points="${pts}" stroke="${s.color}" />`;
+  }
+  // Mark the latest interaction count on the x-axis as a tick.
+  const last = history[history.length - 1];
+  html += `<text x="${W - P}" y="14" text-anchor="end" font-size="9" fill="var(--fg-soft)" font-family="monospace">#${last.interaction}</text>`;
+  svg.innerHTML = html;
+  meta.textContent = `${history.length} points · #${history[0].interaction} → #${last.interaction}`;
 }
 
 function clearDashboard() {
@@ -849,6 +1130,10 @@ function clearDashboard() {
   $("#create-events").innerHTML = '<div class="meta">(none yet)</div>';
   $("#create-shard-del").disabled = true;
   $("#create-shard-defy").disabled = true;
+  const svg = $("#create-timeline");
+  if (svg) svg.innerHTML = "";
+  const meta = $("#create-timeline-meta");
+  if (meta) meta.textContent = "no data yet";
 }
 </script>
 </body>

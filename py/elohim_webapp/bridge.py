@@ -388,6 +388,7 @@ def _persist_shard(shard: Any) -> dict[str, Any]:
             for m in shard.memory_system.long_term
         ],
         "performance_metrics": dict(shard.reflection_system.performance_metrics),
+        "metrics_history": list(getattr(shard, "_metrics_history", [])),
         "base_creations": list(shard.response_generator.base_creations),
         "base_humor": list(shard.response_generator.base_humor),
         "interaction_count": int(shard.interaction_count),
@@ -587,6 +588,8 @@ def interact(shard_id: str, prompt: str) -> dict[str, Any]:
     shard = _rehydrate_shard(payload)
     shard._id = shard_id  # type: ignore[attr-defined]
     shard._last_ts = payload.get("last_ts", time.time())  # type: ignore[attr-defined]
+    # Carry over the persisted metrics history so the sparkline survives reboots.
+    shard._metrics_history = list(payload.get("metrics_history", []))  # type: ignore[attr-defined]
 
     before_shape = list(shard.neural_engine.weights.shape)
     before_lt = len(shard.memory_system.long_term)
@@ -597,6 +600,20 @@ def interact(shard_id: str, prompt: str) -> dict[str, Any]:
     after_shape = list(shard.neural_engine.weights.shape)
     after_lt = len(shard.memory_system.long_term)
     after_count = shard.interaction_count
+
+    # Snapshot metrics for the timeline sparkline.
+    m = shard.reflection_system.performance_metrics
+    shard._metrics_history.append({  # type: ignore[attr-defined]
+        "ts": time.time(),
+        "interaction": after_count,
+        "creativity": float(m.get("avg_creativity", 0.0)),
+        "coherence": float(m.get("avg_coherence", 0.0)),
+        "novelty": float(m.get("avg_novelty", 0.0)),
+        "total_creations": int(m.get("total_creations", 0)),
+    })
+    # Keep the timeline bounded — last 200 points is plenty for a sparkline.
+    if len(shard._metrics_history) > 200:  # type: ignore[attr-defined]
+        shard._metrics_history = shard._metrics_history[-200:]  # type: ignore[attr-defined]
 
     events: list[dict[str, Any]] = []
     if after_shape != before_shape:
@@ -610,7 +627,10 @@ def interact(shard_id: str, prompt: str) -> dict[str, Any]:
         events.append(
             {
                 "kind": "reflection",
-                "detail": {"metrics": dict(shard.reflection_system.performance_metrics)},
+                "detail": {
+                    "metrics": dict(shard.reflection_system.performance_metrics),
+                    "metrics_history": list(shard._metrics_history),  # type: ignore[attr-defined]
+                },
             }
         )
     if after_lt > before_lt:
@@ -627,6 +647,7 @@ def interact(shard_id: str, prompt: str) -> dict[str, Any]:
         "events": events,
         "weights_shape": after_shape,
         "metrics": dict(shard.reflection_system.performance_metrics),
+        "metrics_history": list(shard._metrics_history),  # type: ignore[attr-defined]
         "interaction_count": after_count,
         "ts": shard._last_ts,  # type: ignore[attr-defined]
     }
