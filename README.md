@@ -466,10 +466,20 @@ misleading one: 6 tools have never touched a production backend.
 
 Every tool declares a `risk` (`pure` / `mutating` / `consequential`) and
 its MCP annotations are **derived** from it. But declaration is only a
-hypothesis — assertion #85 snapshots `localStorage` around each
-`pure`-declared call and fails if one actually writes state. This caught a
-real gap: `elohim_soul_import` is mutating, and its write happens inside
-the Python bridge, so a JS-side scan reports all 13 original tools as pure.
+hypothesis — assertion #85 snapshots `localStorage` around each call and
+fails if a tool declared pure actually writes state.
+
+Being precise about its reach: #85 currently calls **3** of the 17
+`pure`-declared tools (`elohim_version`, `elohim_soul_keygen`,
+`elohim_lab_simplify`), not all 17. It is a spot-check that proves the
+mechanism works, not exhaustive coverage.
+
+The `elohim_soul_import` case is worth stating accurately, because it is
+easy to misattribute: it is `mutating`, and its write happens inside the
+Python bridge, so a JS-side scan of the tool bodies reports every tool as
+pure. That was found by **inspection**, not by #85 — #85 never calls
+`soul_import`, so it did not discover this. What #85 does is prevent that
+class of miscategorisation from going unnoticed for the tools it covers.
 
 `risk` and `untrustedContentHint` are orthogonal: **18 of 25** tools return
 user- or third-party-controlled content and carry
@@ -494,10 +504,24 @@ The instructive part is that **three existing guards all missed it**:
   the two agreed on a systematically wrong value.
 - `gen_manifest.build()` round-trip is self-consistent for the same reason.
 
-Assertion **#83b** now compares the table against the tools' own
-declarations and fails if any field consumed downstream goes missing.
-A cross-check between two views of the same defective source is not a
-cross-check.
+Assertion **#83b** now compares the projection against
+`window.__elohimUntrustedDeclared()`, which reads `WEBMCP_TOOLS` directly
+and bypasses the projection. That independent second source is the whole
+point: an earlier version compared the projection against itself, which
+was a tautology — `deriveAnnotations(t)` reads `t.untrusted`, so "the hint
+is set" and "the row carries the field" are one statement said twice. It
+passed for every possible input, and a projection dropping the field for 15
+of 18 tools would have sailed through while publishing 15 wrong
+annotations. A cross-check between two views of the same source is not a
+cross-check. Verified by mutation: a partial drop is caught and named.
+
+#89 compares `description` and `inputSchema` against the live table, not
+just names, risk, tier, and annotations. It originally did not, and the
+omission mattered more than the others: the manifest exists to publish
+*schemas* to agents, and a manifest with a stale schema matched its own
+`gen_manifest.build()` re-derivation perfectly, because `build()` passes
+`description` and `inputSchema` straight through. A manifest with a
+completely wrong description and schema passed #89.
 
 ### Schemas are closed twice
 
@@ -507,6 +531,36 @@ measured: a tool registered with `additionalProperties:false` still
 *accepted* `{x:'hi', evil:'payload'}` in Chromium 1243. The browser does
 not validate agent-supplied arguments, so the handler is the half that
 actually enforces anything.
+
+`required` is enforced in the same place, and the same reasoning applies.
+19 of the 25 tools declare required fields; before this, the handler
+checked only the whitelist, so an omitted argument fell through into the
+tool body and surfaced as a raw Python traceback from `bridge.py` rather
+than a message naming the missing field. Assertion #84b pins that.
+
+### The one irreversible action fails closed
+
+`elohim_marketplace_forge_commit` spends real money, and it is the only
+non-repeatable action in the set. Its idempotency guard used to record a
+charge only when `billing_event.charged` was truthy — which is fail-**open**.
+A successful response that simply omits `billing_event` (a server-side
+shape change, a proxy, a partial response) left the invocation unrecorded,
+and the agent's retry charged the customer a second time.
+
+The guard now records the charge unless the server positively says it did
+not charge, and says so explicitly in the error when the response is
+ambiguous. Assertion #88c drives exactly that case via a stub mode that
+returns a success with no `billing_event` at all.
+
+### Privacy is a tested claim, not a warning
+
+`is_private: false` publishes a soul file to a public list, and neither
+`llms.txt` nor the tool description claims that can be undone. That was a
+warning with nothing behind it: the stub ignored `is_private` entirely, so
+the public-list assertion passed whether or not privacy was honoured. The
+stub now models it, and #87b requires that a soul stored without
+`is_private: false` stays off the public list while remaining retrievable
+by pk.
 
 ### Two validation tiers
 

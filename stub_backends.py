@@ -66,8 +66,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send({"ok": False, "error": "not found"}, 404)
             return self._send({"ok": True, "payload": payload})
         if path == "/api/vault/list_public":
+            # Only genuinely-public souls belong on a public list. This was
+            # not modelled before, which meant #87's `total >= 1` assertion
+            # passed no matter what is_private said — the documented
+            # "is_private:false publishes, and that cannot be undone" warning
+            # in llms.txt had no test behind it at all.
             items = [{"pk": pk, "schema": p.get("schema")}
-                     for pk, p in srv.store.items()]
+                     for pk, p in srv.store.items()
+                     if p.get("is_private") is False]
             return self._send({"ok": True, "total": len(items), "items": items})
         return self._send({"ok": False, "error": f"no stub route for {path}"}, 404)
 
@@ -91,8 +97,14 @@ class _Handler(BaseHTTPRequestHandler):
                      "error": f"unsupported schema: {schema!r}",
                      "status": 400}, 400)
             pk = (body.get("payload") or {}).get("agent_name", "stub-agent")
-            srv.store[pk] = body.get("payload")
-            return self._send({"ok": True, "pk": pk, "stored": True})
+            payload = dict(body.get("payload") or {})
+            # The app always sends an explicit boolean (`is_private !== false`),
+            # but default to private here so a caller that omits it gets the
+            # safe answer rather than a silent publication.
+            payload["is_private"] = body.get("is_private") is not False
+            srv.store[pk] = payload
+            return self._send({"ok": True, "pk": pk, "stored": True,
+                               "is_private": payload["is_private"]})
 
         if path == "/mcp":
             name = ((body.get("params") or {}).get("name"))
@@ -104,16 +116,26 @@ class _Handler(BaseHTTPRequestHandler):
             # verified by this stub — that needs the real actor.
             inv = args.get("invocation", "ELOHIM:APIFY")
             fake = ("stub" + inv).encode().hex()[:64].ljust(64, "0")
+            payload = {
+                "invocation": inv,
+                "codex_seal": fake,
+                "encrypted_seal": fake[:32],
+                "billing_event": {"charged": True, "amount_usd": 0.02},
+            }
+            # An invocation containing "AMBIGUOUS" gets a SUCCESSFUL charge
+            # response with no `billing_event` at all — a server-side shape
+            # change, a proxy, a partial response. This is the case the app's
+            # idempotency guard used to get wrong: it recorded a charge only
+            # when `billing_event.charged` was truthy, so an ambiguous success
+            # left the invocation unrecorded and the agent's retry charged the
+            # customer a second time. The guard now fails closed.
+            if "AMBIGUOUS" in inv:
+                payload.pop("billing_event", None)
             return self._send({
                 "jsonrpc": "2.0", "id": body.get("id"),
                 "result": {"resultType": "complete", "content": [{
                     "type": "text",
-                    "text": json.dumps({
-                        "invocation": inv,
-                        "codex_seal": fake,
-                        "encrypted_seal": fake[:32],
-                        "billing_event": {"charged": True, "amount_usd": 0.02},
-                    }),
+                    "text": json.dumps(payload),
                 }]},
             })
         return self._send({"ok": False, "error": f"no stub route for {path}"}, 404)

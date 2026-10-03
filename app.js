@@ -2091,7 +2091,16 @@ const WEBMCP_TOOLS = [
     },
     // Idempotency guard: a second commit for the same invocation must be
     // refused, never charged twice. This is the one irreversible action in
-    // the tool set (Review Focus #5).
+    // the tool set (Review Focus #5), so the guard fails CLOSED.
+    //
+    // It used to record a charge only when `billing_event.charged` was
+    // truthy. That is fail-OPEN: a successful response that simply omits
+    // `billing_event` — a server-side shape change, a proxy, a partial
+    // response — left the invocation unrecorded, and the agent's retry
+    // charged the customer a second time. The only safe reading of a
+    // successful charge response is "it may have charged", so that is what
+    // is recorded. A *failed* call still records nothing, which was the
+    // original intent and remains correct.
     invoke: async ({ invocation }) => {
       if (_marketplaceCharged.has(invocation)) {
         throw new Error(
@@ -2109,11 +2118,31 @@ const WEBMCP_TOOLS = [
           params: { name: "elohim_alien_codex", arguments: { invocation } },
         }),
       });
+      // Surface a transport-level failure explicitly. Without this, a 500
+      // with an HTML body throws on resp.json() and the error message says
+      // nothing about the marketplace.
+      if (!resp.ok) {
+        throw new Error(
+          `marketplace returned HTTP ${resp.status} for invocation ` +
+          `"${invocation}"; not recorded as charged, but the server may ` +
+          `have charged before failing — verify before retrying`
+        );
+      }
       const json = await resp.json();
-      const data = JSON.parse(json.result.content[0].text);
-      // Record the charge only after a successful response, so a failed
-      // call does not poison the invocation.
-      if (data.billing_event && data.billing_event.charged) {
+      const text = json && json.result && json.result.content
+        && json.result.content[0] && json.result.content[0].text;
+      if (typeof text !== "string") {
+        throw new Error(
+          `marketplace returned an unexpected envelope for invocation ` +
+          `"${invocation}"; not recorded as charged, but the server may ` +
+          `have charged before responding — verify before retrying`
+        );
+      }
+      const data = JSON.parse(text);
+      // Fail closed: record unless the server positively said it did not
+      // charge. `charged === false` is the only response that clears the
+      // invocation.
+      if (!data.billing_event || data.billing_event.charged !== false) {
         _marketplaceCharged.add(invocation);
       }
       return data;
@@ -2218,8 +2247,17 @@ function deriveAnnotations(tool) {
 // agent-supplied arguments, so a closed discovery schema backed by a
 // permissive handler is not a closed contract — the handler is the half
 // that actually enforces anything.
+//
+// Both directions are enforced, not just the whitelist. `required` was
+// previously unenforced: 19 of the 25 tools declare it, and omitting a
+// required argument fell through into `invoke`, where it surfaced as
+// whatever downstream error happened to fire first — a confusing
+// TypeError, or worse, a call that succeeded with `undefined` where a
+// value was expected. A schema that is closed but not required-checked is
+// only half closed.
 function assertKnownArgs(tool, args) {
-  const known = new Set(Object.keys(tool.inputSchema.properties || {}));
+  const props = tool.inputSchema.properties || {};
+  const known = new Set(Object.keys(props));
   for (const key of Object.keys(args || {})) {
     if (!known.has(key)) {
       throw new Error(
@@ -2227,6 +2265,16 @@ function assertKnownArgs(tool, args) {
         `Accepted: ${[...known].join(", ") || "(none)"}`
       );
     }
+  }
+  const missing = (tool.inputSchema.required || [])
+    .filter((key) => (args || {})[key] === undefined);
+  if (missing.length) {
+    throw new Error(
+      `Missing required argument${missing.length > 1 ? "s" : ""} ` +
+      `${missing.map((k) => `"${k}"`).join(", ")} for ${tool.name}. ` +
+      `Required: ${(tool.inputSchema.required || []).join(", ")}. ` +
+      `Accepted: ${[...known].join(", ") || "(none)"}`
+    );
   }
 }
 
@@ -2254,6 +2302,17 @@ window.__elohimToolTable = () =>
                      untrusted }) =>
     ({ name, description, inputSchema, risk, verification,
        untrusted: untrusted === true }));
+// Read STRAIGHT OFF WEBMCP_TOOLS, deliberately bypassing the projection
+// above. #83b compares this against the projection, and that comparison is
+// the entire point: an earlier version of #83b compared the projection
+// against itself, which is a tautology — deriveAnnotations(t) reads
+// t.untrusted, so "the hint is set" and "the table carries the field" are
+// the same statement twice. Two views of one defective source agree. This
+// gives the guard a genuinely independent second source, so a projection
+// that drops the field for SOME tools fails instead of quietly publishing
+// wrong annotations to agents.
+window.__elohimUntrustedDeclared = () =>
+  WEBMCP_TOOLS.filter((t) => t.untrusted === true).map((t) => t.name);
 window.__elohimDeriveAnnotations = (t) => deriveAnnotations(t);
 
 // Counts tools per verification tier so the suite can report them

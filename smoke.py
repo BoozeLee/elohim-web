@@ -2191,38 +2191,44 @@ def webmcp_contract_assertions() -> int:
         # cross-check cannot either — committed and derived both read the
         # lossy table, so the two agree on a systematically wrong value.
         # The guard has to compare the table against app.js itself.
-        table_untrusted = {
-            t["name"] for t in table if t.get("untrusted") is True
-        }
-        actual_untrusted = page.evaluate(
-            """() => {
-                const names = [];
-                for (const t of window.__elohimToolTable()) {
-                    const d = window.__elohimDeriveAnnotations(t);
-                    if (d.untrustedContentHint === true) names.push(t.name);
-                }
-                return names;
-            }""")
-        assert len(actual_untrusted) > 0, (
-            "no tool derives untrustedContentHint:true — the table is almost "
-            "certainly not carrying `untrusted` anymore, so every tool is "
-            "being advertised as returning trusted content")
-        # Spot-check the derivation actually agrees with the declaration, per
-        # tool, rather than only that some tool is untrusted.
-        for name in actual_untrusted:
-            assert name in table_untrusted, (
-                f"{name} derives untrustedContentHint:true but the table says "
-                f"otherwise — table and derivation disagree")
-        # And the converse: anything declared untrusted must reach the hint.
-        declared_via_page = page.evaluate(
+        # THREE sources, not two views of one:
+        #   raw       — read straight off WEBMCP_TOOLS, bypassing the
+        #               __elohimToolTable() projection
+        #   projected — what the projection carries
+        #   derived   — what deriveAnnotations() turns that into
+        #
+        # The earlier version of this assertion compared `projected` against
+        # `derived` and called it a cross-check. It was a tautology:
+        # deriveAnnotations reads t.untrusted, so "untrustedContentHint is
+        # true" and "the row carries untrusted" are the same statement said
+        # twice. It passed for every possible input, and a projection that
+        # dropped `untrusted` for 15 of 18 tools would still have passed
+        # while publishing 15 wrong annotations. The only assertion with any
+        # power was `len(...) > 0`, which catches a TOTAL drop and nothing
+        # else. Comparing against `raw` is what makes partial loss visible.
+        raw = sorted(page.evaluate("() => window.__elohimUntrustedDeclared()"))
+        projected = sorted(
+            t["name"] for t in table if t.get("untrusted") is True)
+        derived_names = sorted(page.evaluate(
             """() => window.__elohimToolTable()
-                   .filter(t => t.untrusted === true).map(t => t.name)""")
-        assert set(declared_via_page) == set(actual_untrusted), (
-            f"{len(declared_via_page)} tools declare untrusted but "
-            f"{len(actual_untrusted)} derive the hint — the projection drops "
-            f"the field")
-        print(f"  ✓ #83b table is faithful: {len(actual_untrusted)}/{len(table)} "
-              f"tools declare untrusted and derive untrustedContentHint:true")
+                   .filter(t => window.__elohimDeriveAnnotations(t)
+                                  .untrustedContentHint === true)
+                   .map(t => t.name)"""))
+        assert len(raw) > 0, (
+            "no tool declares untrusted:true in WEBMCP_TOOLS itself — either "
+            "the declarations are gone or this assertion is misconfigured")
+        assert projected == raw, (
+            f"the __elohimToolTable() projection disagrees with the raw "
+            f"declarations: {len(raw)} declared untrusted, {len(projected)} "
+            f"survive the projection. Missing: "
+            f"{sorted(set(raw) - set(projected))}")
+        assert derived_names == raw, (
+            f"deriveAnnotations() did not turn every untrusted declaration "
+            f"into untrustedContentHint:true — {len(derived_names)} of "
+            f"{len(raw)}")
+        print(f"  ✓ #83b projection is faithful: {len(raw)}/{len(table)} "
+              f"tools declare untrusted; projection and derivation both "
+              f"match the raw declarations")
 
         # #85 — Review Focus #1 and #2. Risk is MEASURED, not declared.
         #
@@ -2312,6 +2318,34 @@ def webmcp_contract_assertions() -> int:
         assert "Unknown argument" in (pol["text"] or ""), (
             f"error text does not name the offending field: {pol['text']!r}"
         )
+
+        # #84b — `required` is enforced too, not just the whitelist. 19 of
+        # the 25 tools declare required fields and until this was added the
+        # handler checked neither direction: a missing argument fell through
+        # into invoke() and surfaced as whatever downstream error fired
+        # first, or worse, a successful call with `undefined` standing in
+        # for a value. elohim_seal_message requires `plaintext`.
+        req = page.evaluate("""async () => {
+          const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+            method:'tools/call',
+            params:{name:'elohim_seal_message', arguments:{}}});
+          const res = r && r.result;
+          return {rt: res && res.resultType, isError: res && res.isError,
+                  text: res && res.content && res.content[0].text};
+        }""")
+        assert req["isError"] is True, (
+            f"a call missing a required argument succeeded: {req}"
+        )
+        assert "Missing required argument" in (req["text"] or ""), (
+            f"missing-argument error does not say so: {req['text']!r}"
+        )
+        # And it must name the field, so the agent can fix the call rather
+        # than guess.
+        assert "plaintext" in (req["text"] or ""), (
+            f"missing-argument error does not name the field: {req['text']!r}"
+        )
+        print(f"  ✓ #84b required args enforced: a call omitting \"plaintext\" "
+              f"is rejected by the handler, not by a downstream TypeError")
         print(f"  ✓ #84 closed schemas: {len(table)} closed at discovery + "
               f"unknown field rejected by the handler")
 
@@ -2417,6 +2451,34 @@ def webmcp_contract_assertions() -> int:
 
             listed = ct("elohim_vault_list_public", {})
             assert listed["ok"] and listed["data"]["total"] >= 1, listed
+            public_pks = {i["pk"] for i in listed["data"]["items"]}
+            assert "smoke" in public_pks, (
+                f"is_private:false soul is missing from the public list: "
+                f"{public_pks}")
+
+            # #87b — the PRIVATE default. llms.txt tells agents, in bold
+            # terms, that is_private:false publishes a soul to a public list
+            # and that the app cannot undo it. That claim had no test behind
+            # it: the stub ignored is_private entirely, so `total >= 1`
+            # above passed whether or not privacy was honoured. Store a
+            # second soul WITHOUT the flag and require it to be absent from
+            # the public list while still being retrievable by pk — i.e.
+            # private means private, not merely "unstored".
+            stored_private = ct("elohim_vault_store", {
+                "payload": {"schema": "elohim-soul/v2", "agent_name": "smoke-private"}})
+            assert stored_private["ok"], (
+                f"private vault_store failed: {stored_private['err']}")
+            assert stored_private["data"].get("is_private") is True, (
+                f"omitting is_private must default to private, got "
+                f"{stored_private['data']}")
+            listed2 = ct("elohim_vault_list_public", {})
+            public2 = {i["pk"] for i in listed2["data"]["items"]}
+            assert "smoke-private" not in public2, (
+                f"a soul stored without is_private:false was published to the "
+                f"public list: {sorted(public2)}")
+            got_private = ct("elohim_vault_lookup", {"pk": "smoke-private"})
+            assert got_private["ok"] and got_private["data"]["ok"] is True, (
+                f"private soul should still be retrievable by pk: {got_private}")
 
             # The stub mirrors the real service's schema rejection, so the
             # error path is exercised rather than skipped. The rejection
@@ -2434,6 +2496,8 @@ def webmcp_contract_assertions() -> int:
                 bad["data"]
             print(f"  ✓ #87 vault tier: tiers/lookup/list/store round-trip + "
                   f"unknown-schema rejection")
+            print(f"  ✓ #87b privacy: is_private:false publishes, the default "
+                  f"does not, and private souls stay retrievable by pk")
 
             # #88 — preview never charges; commit does.
             prev = ct("elohim_marketplace_forge_preview",
@@ -2459,6 +2523,29 @@ def webmcp_contract_assertions() -> int:
             c3 = ct("elohim_marketplace_forge_commit",
                     {"invocation": "ELOHIM:PROBE-B"})
             assert c3["ok"], f"distinct commit was rejected: {c3['err']}"
+
+            # #88c — the guard must fail CLOSED on an ambiguous charge. The
+            # stub answers invocations containing "AMBIGUOUS" with a
+            # SUCCESSFUL response that carries no `billing_event` at all. The
+            # old guard recorded a charge only when `billing_event.charged`
+            # was truthy, so that success left the invocation unrecorded and
+            # a retry charged the customer twice — on the one irreversible,
+            # money-spending action in the tool set. A successful response
+            # that does not positively say "not charged" must be treated as
+            # possibly charged.
+            a1 = ct("elohim_marketplace_forge_commit",
+                    {"invocation": "ELOHIM:AMBIGUOUS-1"})
+            assert a1["ok"], f"ambiguous commit failed: {a1['err']}"
+            assert "billing_event" not in a1["data"], (
+                f"stub was supposed to omit billing_event, got: {a1['data']}")
+            a2 = ct("elohim_marketplace_forge_commit",
+                    {"invocation": "ELOHIM:AMBIGUOUS-1"})
+            assert not a2["ok"], (
+                f"retry after an ambiguous charge was accepted — the customer "
+                f"would be charged twice: {a2['data']}")
+            print(f"  ✓ #88c charge guard fails closed: a success with no "
+                  f"billing_event still blocks the retry")
+
             print(f"  ✓ #88 marketplace: preview charges nothing, commit "
                   f"charges once, repeat refused, distinct invocation OK")
 
@@ -2572,9 +2659,33 @@ def webmcp_contract_assertions() -> int:
     for a, b in zip(live, committed["tools"]):
         assert a["risk"] == b["risk"] and a["verification"] == b["verification"], \
             f"{a['name']} drifted: manifest says {b}, runtime says {a}"
-        # The manifest must be internally consistent too. A hand-edited file
-        # that kept the right tiers but a wrong schema would still read as
-        # authoritative to an agent that fetched it.
+        # The manifest exists to publish SCHEMAS and descriptions to agents,
+        # so those are the fields that most need guarding. They were
+        # unguarded until 2026-10-03: `gen_manifest.build([b]) == [b]` is a
+        # self-consistency check that passes `description` and `inputSchema`
+        # straight through, so a manifest with a stale schema matched its own
+        # re-derivation perfectly. Demonstrated: a manifest whose
+        # description and inputSchema were both wrong PASSED #89, because
+        # risk, verification and annotations were still correct. The manifest
+        # is the thing an agent reads to decide what to pass — the schema is
+        # the one field that must not drift.
+        assert a["description"] == b["description"], (
+            f"{a['name']} description drifted: manifest says "
+            f"{b['description']!r}, runtime says {a['description']!r}")
+        assert a["inputSchema"] == b["inputSchema"], (
+            f"{a['name']} inputSchema drifted — this is the field an agent "
+            f"reads to build a call:\n  manifest: "
+            f"{json.dumps(b['inputSchema'], sort_keys=True)}\n  runtime:   "
+            f"{json.dumps(a['inputSchema'], sort_keys=True)}")
+        # Recompute `closed` from the live schema rather than trusting the
+        # committed flag — otherwise a manifest could claim a closed schema
+        # for a schema that no longer sets additionalProperties:false.
+        expected_closed = a["inputSchema"].get("additionalProperties") is False
+        assert b["closed"] is expected_closed, (
+            f"{a['name']} manifest says closed={b['closed']} but the live "
+            f"schema gives {expected_closed}")
+        # ...and the manifest must still be what build() would emit, so a
+        # hand-edit to any derived field is caught too.
         assert gen_manifest.build([b])["tools"] == [b], (
             f"{a['name']} is not what build() would emit — hand-edited?")
     for t, d in zip(committed["tools"], derived):

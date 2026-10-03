@@ -55,8 +55,11 @@ nothing untrusted in it.
 
 `pure` is **measured, not declared**: the suite snapshots `localStorage`
 around each call and fails if a tool declared pure actually writes state.
-That check earned its keep — `elohim_soul_import` is mutating, and its write
-happens inside the Python bridge, so a JS-side scan reports it as pure.
+Precisely: this currently covers 3 of the 17 `pure`-declared tools, so read
+it as a working mechanism rather than exhaustive proof. The
+`elohim_soul_import` case — mutating despite a clean-looking JS body,
+because the write happens inside the Python bridge — was found by
+inspection, not by that check.
 
 `elohim_vault_store` is worth reading before you call it: `is_private:false`
 publishes a soul file to a public list. It is externally visible and the app
@@ -69,6 +72,10 @@ unknown arguments at runtime. This is not redundancy. Measured in Chromium
 1243: a tool registered with `additionalProperties:false` still accepted
 `{x: 'hi', evil: 'payload'}`. The browser does not validate agent-supplied
 arguments, so the handler is the half that actually enforces anything.
+
+`required` is enforced in the same place. 19 of the 25 tools declare
+required fields, and a call that omits one is rejected with a message
+naming the field, rather than failing somewhere downstream.
 
 ## The canonical seal
 
