@@ -212,15 +212,62 @@ assertion #81 has a fixed expected value rather than a moving one.
 dependency plainly, so an agent can decide not to call it. We do not pretend a
 non-deterministic third-party image API is a deterministic tool.
 
+### 4.5.1 Verification tiers — the honest answer to "half of these are untestable"
+
+The 12 new tools do **not** share a verification level, and presenting them as
+one uniform batch would overstate what the suite proves. Each tool therefore
+carries a `verification` level, recorded in the generated manifest and
+**reported as three separate counts** by the suite:
+
+| Tier | Tools | What is actually proven |
+|---|---|---|
+| `in-browser` | `list_shards`, `create_shard`, `shard_defy`, `shard_interact`, `arena_run` | Real end-to-end. These run in Pyodide with no backend. |
+| `external` | `forge_vision` | Registered and schema-valid only. Non-deterministic third-party API, so invocation is opt-in and never asserted for output. |
+| `stub` | `vault_tiers`, `vault_lookup`, `vault_list_public`, `vault_store`, `marketplace_forge_preview`, `marketplace_forge_commit` | Wiring, request shape, response parsing, and error paths — against a stub **we wrote**. The real service contract is not verified. |
+
+**Ruling: adopt all 12, with tiers enforced and reported.** A green suite must
+print `5 in-browser / 1 external / 6 stub` and never collapse them to "25/25
+verified". The stub is a test double for *our* code, not a conformance claim
+about Apify, x402, or the FastAPI vault — and the manifest says so in
+`verification`, so an agent reading it is not misled.
+
+This is the same discipline as the pHash threshold in Push 22: state what the
+measurement covers, and refuse to let a green run imply more than it earned.
+
 ### 4.6 Risk class is measured, not asserted
 
 Because §3.6 shows side effects hide behind the bridge, the test harness
-classifies empirically: snapshot `localStorage` before and after each
-invocation and assert no delta for tools declared `pure`.
+classifies empirically: snapshot `localStorage` immediately before and after a
+**single** invocation and assert no delta for tools declared `pure`.
 
 This is the design's most important consequence. A tool declared `pure` that
 turns out to write state **fails the suite** and must be re-declared. The
 declaration is a hypothesis; the state delta is the measurement.
+
+**Two conditions make the measurement valid**, both found the hard way during
+investigation:
+
+1. **Per-call isolation.** One tool per snapshot pair. Batching several calls
+   between snapshots attributes the write to the wrong tool.
+2. **Success must be asserted before the delta is interpreted.** A call the
+   tool *rejects* performs no write, so a naive delta reads as "pure" — a
+   false negative that would certify a tool as safe precisely when it never ran.
+   The polyfill envelope signals success as
+   `result.resultType === "complete"`, with the payload JSON inside
+   `result.content[0].text`; it carries no `ok` key, so a test keying on
+   `result.ok` silently reads every call as failed.
+
+Measured baseline (isolated, one call each):
+
+| Tool | Success | `localStorage` delta |
+|---|---|---|
+| `elohim_version` | complete | none — pure |
+| `elohim_soul_keygen` | complete | none — pure (does not persist) |
+| `elohim_lab_simplify` | complete | none — pure |
+
+`elohim_soul_keygen` returning a secret key without persisting it is worth
+noting: it is genuinely pure, and an earlier reading that implied otherwise
+was an artefact of batching several calls into one measurement.
 
 ### 4.7 Agent-facing documentation
 
@@ -240,22 +287,57 @@ construction rather than accepted.
 
 ## 5. Validation strategy
 
-**Playwright-based, launched with `--enable-features=WebMCPTesting`.**
+### 5.1 Two tiers, so the permanent gate carries no flag coupling
 
-The flag is the whole point. Without it, every assertion silently passes against
-the polyfill and proves nothing — a green WebMCP suite that never enables the
-flag is worse than no suite, because it manufactures false confidence.
+**Tier 1 — permanent gate: an injected spec-shaped `ModelContext`.** No
+Chromium flag. Before page scripts run, the harness installs a fake
+`navigator.modelContext` via `Object.defineProperty` on `Navigator.prototype`,
+implementing `registerTool` / `getTools` / `executeTool`.
 
-The suite must:
+The fake is faithful, not a rubber stamp: it **throws the same error real
+Chromium throws** when `execute` is missing —
 
-1. Launch Chromium **with the flag**.
-2. **Fail loudly** if `navigator.modelContext` is absent. Skipping to the
-   polyfill is a failure, not a pass.
-3. Assert `getTools()` returns exactly the expected N names.
-4. Assert annotations and schema closure against the app's declared table
+> `Failed to execute 'registerTool' on 'ModelContext': Failed to read the
+> 'execute' property from 'ModelContextTool': Required member is undefined.`
+
+— so a tool using `handler` fails here exactly as it would in a real browser. A
+permissive fake would accept the bug and certify it as fixed.
+
+This tier tests everything under our control permanently: registration shape,
+annotation derivation, schema closure, unknown-field rejection, and the
+per-call `localStorage` risk measurement. It is immune to the flag being renamed.
+
+Verified during design: with the fake installed and **no** Chromium flag, the
+shipped app registers **0 tools** — the fake reproduces the production bug
+exactly, which is what makes it a valid instrument.
+
+**Tier 2 — opt-in conformance: the real runtime.** Run with
+`--enable-features=WebMCPTesting`, assert the real browser agrees (real
+`getTools()` returns all 25, a real invocation succeeds). Runs behind a harness
+flag, not on every invocation.
+
+### 5.2 Why this resolves the flag coupling
+
+The original concern was that gating the whole suite on a Chromium internal
+flag is fragile. It is — but only if the *permanent* gate depends on it. Under
+two-tier testing the flag governs only the opt-in conformance check, so a
+rename upstream turns Tier 2 red loudly while the suite that guards our own code
+keeps running. The coupling is confined to the test that exists to detect
+exactly that coupling.
+
+### 5.3 Assertions
+
+Tier 1 must:
+
+1. Assert the fake was installed and the app registered against it.
+2. Assert `getTools()` returns exactly the expected 25 names.
+3. Assert annotations and schema closure against the app's declared table
    (§3.5 — the browser cannot echo them).
-5. Assert unknown fields are rejected at the handler (§3.4).
-6. Assert `localStorage` deltas match declared risk (§4.6).
+4. Assert unknown fields are rejected at the handler (§3.4).
+5. Assert per-call `localStorage` deltas match declared risk (§4.6), asserting
+   call success first.
+
+Tier 2 additionally asserts real-runtime agreement.
 
 Stagehand is **not** adopted. It adds a heavy toolchain dependency, and in this
 Chromium build `page.tools()` would surface the same limited
@@ -279,19 +361,21 @@ check that cannot fail guards nothing.
 | #87 | Stub-backed `vault_tiers` / `vault_store` round-trip | — |
 | #88 | `marketplace_forge_preview` does not charge; `commit` does | — |
 | #89 | `tools.manifest.json` matches the runtime table exactly | ✅ fails |
+| #90 | Suite reports `5 in-browser / 1 external / 6 stub`, never a flat total | ✅ fails |
 
-Nine assertions; six of them fail against current code, which is the honest
-measure of remaining work.
+Ten assertions; seven of them fail against current code, which is the honest
+measure of remaining work. #90 exists specifically to stop a future run from
+collapsing three verification tiers into one reassuring number.
 
 ## 7. Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| `WebMCPTesting` flag renamed/removed upstream | 🟡 | Suite fails loudly and names the flag; the failure is explicit, not silent |
+| `WebMCPTesting` flag renamed/removed upstream | 🟢 | Resolved by §5: the permanent gate (Tier 1) does not use the flag. Only the opt-in conformance test does, and it fails loudly by design. |
 | Chromium changes `getTools()` shape | 🟢 | Annotations asserted from our own table, not the browser's |
 | `execute` signature changes | 🟡 | One call site; error surfaces on first registration in the suite |
 | `forge_vision` non-determinism flakiness | 🟡 | Excluded from the default suite; runs behind a flag |
-| Vault/marketplace stubs drift from real APIs | 🟡 | Stubs assert response *shape* only; documented as a test double |
+| Vault/marketplace stubs drift from real APIs | 🟡 | Stubs assert response *shape* only, and every stub-backed tool is labelled `stub` in the manifest and reported separately (#90). A stub can never be mistaken for a conformance claim. |
 | Tool count grows without docs | 🟢 | Manifest is generated, not hand-written |
 
 ## 8. Rollout
