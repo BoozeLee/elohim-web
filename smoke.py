@@ -1940,6 +1940,80 @@ def main() -> int:
               f"pHash threshold hamming ≤ {_PHASH_MAX_DISTANCE} "
               f"(similarity ≥ {_PHASH_SIMILARITY})")
 
+        # ---- Push 23 file split (1 new required assertion) ----
+
+        # #79 — the split is intact: both extracted files are served, the
+        # FOUC theme script is still inline in <head> (moving it to a
+        # file would reintroduce the flash D-J12 eliminated), the head
+        # cascade order is design-tokens → styles → motion, and the
+        # module script is external while still type="module".
+        split = page.evaluate("""(async () => {
+          const head = document.head.innerHTML;
+          const grab = async (u) => {
+            const r = await fetch(u, {cache: 'no-store'});
+            return {ok: r.ok, len: r.ok ? (await r.text()).length : 0,
+                    type: r.headers.get('content-type') || ''};
+          };
+          return {
+            styles: await grab('assets/styles.css'),
+            app: await grab('app.js'),
+            tokens: await grab('assets/design-tokens.css'),
+            motion: await grab('assets/motion.css'),
+            // <head> must still contain an inline blocking script, not a src.
+            headHasInlineScript: /<script(?![^>]*\\bsrc=)[^>]*>/.test(head),
+            headOrder: ['assets/design-tokens.css', 'assets/styles.css',
+                        'assets/motion.css'].map(u => head.indexOf(u)),
+            externalModule: /<script[^>]*type="module"[^>]*src="app\\.js"/.test(
+                             document.body.innerHTML),
+            inlineStyleCount: document.querySelectorAll('style').length,
+          }; })()""")
+        assert split["styles"]["ok"] and split["styles"]["len"] > 40_000, (
+            f"assets/styles.css not served correctly: {split['styles']}"
+        )
+        assert split["app"]["ok"] and split["app"]["len"] > 120_000, (
+            f"app.js not served correctly: {split['app']}"
+        )
+        # A module script served as the wrong MIME type is a hard failure
+        # in the browser — assert the server is not lying about it.
+        assert "javascript" in split["app"]["type"].lower(), (
+            f"app.js served with wrong content-type: {split['app']['type']!r} "
+            f"(a module script will refuse to execute)"
+        )
+        assert split["headHasInlineScript"], (
+            "FOUC theme bootstrap is no longer inline in <head> — "
+            "moving it to a file reintroduces the flash D-J12 removed"
+        )
+        order = split["headOrder"]
+        assert all(o >= 0 for o in order), (
+            f"a stylesheet is missing from <head>: {order}"
+        )
+        assert order == sorted(order), (
+            f"head cascade order broken: got {order}, expected "
+            f"tokens → styles → motion (D-J3 keeps motion.css last)"
+        )
+        assert split["externalModule"], (
+            "app.js is not referenced as an external type=\"module\" script"
+        )
+        assert split["inlineStyleCount"] == 0, (
+            f"index.html still has {split['inlineStyleCount']} inline "
+            f"<style> block(s) — the split is incomplete"
+        )
+        # D-J21 — the boot budget. dom_loaded is the metric the decision
+        # record names; the gate is 8s. Pyodide's CDN fetch dominates
+        # wall-clock boot and is measured separately by boot_bench.py.
+        dom_loaded_ms = page.evaluate(
+            "performance.timing.domContentLoadedEventEnd - "
+            "performance.timing.navigationStart"
+        )
+        assert 0 < dom_loaded_ms < 8000, (
+            f"cold-cache dom_loaded {dom_loaded_ms}ms exceeds the D-J21 "
+            f"budget of 8000ms"
+        )
+        print(f"  ✓ #79 file split: styles.css {split['styles']['len']} B + "
+              f"app.js {split['app']['len']} B served, "
+              f"cascade order intact, FOUC script inline, "
+              f"dom_loaded {dom_loaded_ms}ms (D-J21 < 8000ms)")
+
         browser.close()
     return 0
 

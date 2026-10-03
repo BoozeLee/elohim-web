@@ -11,7 +11,9 @@ Deployed via GitHub Pages on `BoozeLee/elohim-web`. No servers, no build step.
 
 | Path | What it is |
 |---|---|
-| `index.html` | The single-page app. Bootstraps Pyodide, fetches the Python source, exposes the API as `window.elohim.*`. 6 tabs: **awaken**, **create**, **arena**, **codex**, **lab**, **webmcp** (+ boot screen). |
+| `index.html` | The single-page app. Markup + boot screen + the FOUC theme bootstrap. Bootstraps Pyodide via `app.js`, exposes the API as `window.elohim.*`. 6 tabs: **awaken**, **create**, **arena**, **codex**, **lab**, **webmcp**. 841 lines since Push 23. |
+| `app.js` | All app logic, extracted from the inline `<script type="module">` in Push 23. Loaded as a module, so it keeps deferred execution and its own scope. |
+| `assets/styles.css` | The whole component stylesheet, extracted from the inline `<style>` in Push 23. Loads *between* `design-tokens.css` and `motion.css` — that order is load-bearing. |
 | `py/elohim_summoning/` | The stdlib-only math+sigil instrument, vendored from the monorepo verbatim (11 modules). |
 | `py/elohim_enhanced/` | The numpy-powered creative shard, vendored from the monorepo verbatim (10 modules). |
 | `assets/motion.css` | Vector animation system (Push 19) — 12 keyframes + 11 utility classes (incl. `.motion-error-shake`) + reduced-motion override. Loaded after the inline `<style>` block per Jev decision D-J3. |
@@ -21,6 +23,7 @@ Deployed via GitHub Pages on `BoozeLee/elohim-web`. No servers, no build step.
 | `py/elohim_webapp/bridge.py` | The Pyodide bridge module: pure-Python functions that JS invokes via `pyodide.runPython`. Includes the `alien_codex` Xenomath forge. |
 | `py/elohim_webapp/__init__.py` | Package marker. |
 | `smoke.py` | Local Playwright smoke test — opens the app in headless Chromium, verifies the seal, exercises every public endpoint. |
+| `boot_bench.py` | Cold-cache boot benchmark (Push 23) — median `dom_loaded` + `boot_hidden` over N samples, with the D-J21 gate applied. |
 | `dist/` | (Empty placeholder — the deploy repo doesn't ship a wheel. See `BoozeLee/elohim` for the PyPI-style wheel.) |
 
 ## Canonical seal
@@ -370,6 +373,60 @@ round-trip. When only the static SPA is available, skip just that block:
 ```bash
 python3 smoke.py --skip-vault
 ```
+
+## File split (Push 23)
+
+`index.html` was 5,024 lines / 208 KB by the end of Push 22. Push 23
+extracts it into exactly **two** files — deliberately not five, per
+[ADR 0002](/home/kilisan/elohim-web/docs/adr/0002-file-split.md), which
+supersedes [ADR 0001](/home/kilisan/elohim-web/docs/adr/0001-file-split.md).
+
+| File | Lines | Was |
+|---|---|---|
+| `index.html` | 841 | 5,024 |
+| `assets/styles.css` | 1,052 | inline `<style>` |
+| `app.js` | 3,142 | inline `<script type="module">` |
+
+The move is byte-for-byte: all 1,046 CSS lines and 3,136 JS lines were
+diffed against the pre-split file afterwards and nothing was lost.
+
+### Load order is load-bearing
+
+```
+fonts.googleapis.com
+  → assets/design-tokens.css     design tokens (D-J12: first)
+  → assets/styles.css            component styles  ← was the inline <style>
+  → assets/motion.css            motion utilities  (D-J3: must stay last)
+```
+
+`styles.css` sits exactly where the inline block did, so it is still
+render-blocking and no new FOUC window opens. Assertion #79 fails if this
+order is ever disturbed.
+
+`app.js` is loaded as `<script type="module" src="app.js">` at end-of-body
+— semantically identical to the inline module it replaced, so it keeps
+deferred execution and its own scope. The script has no JS
+`import`/`export` and no top-level `await`, so externalizing it changes
+nothing. **Do not drop `type="module"`.**
+
+The FOUC theme bootstrap in `<head>` stays **inline**. It must run
+synchronously before any stylesheet can apply `data-theme`; moving it to
+a file would reintroduce exactly the flash Push 20 removed.
+
+### Boot cost: measured, not assumed
+
+| Metric | Pre-split | Post-split |
+|---|---|---|
+| `dom_loaded` (D-J21 metric) | 122 ms | **120 ms** |
+| `boot_hidden` (user-visible) | 16.2 s | 17.7 s |
+
+`dom_loaded` is flat. The two extra cold-cache fetches cost nothing
+measurable because they run in parallel with the Pyodide CDN download,
+which dominates wall-clock boot. The `boot_hidden` shift is noise — the
+pre-split spread alone was 15.6–17.5 s, and the post-split minimum sits
+inside that range. D-J21's +60 % tolerance was never needed.
+
+Reproduce with `boot_bench.py` (3 cold-cache samples, cache disabled).
 
 ## How to deploy
 
