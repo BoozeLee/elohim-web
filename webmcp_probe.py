@@ -17,7 +17,12 @@ from __future__ import annotations
 
 from playwright.sync_api import sync_playwright
 
-DEFAULT_URL = "http://127.0.0.1:8790/"
+# 8780, matching smoke.py and the README's `python3 -m http.server 8780`.
+# The plan originally pinned 8790 here, which left the repo with two defaults
+# for one app: a run with no ELOHIM_SMOKE_URL would drive main() against 8780
+# and the contract assertions against 8790 — two servers, and quite possibly
+# two different trees, so a green run could mean nothing. One default.
+DEFAULT_URL = "http://127.0.0.1:8780/"
 
 # Copied verbatim from Chromium 1243 (2026-10-03). The fake reproduces this so
 # that a tool using `handler` instead of `execute` fails under test exactly as

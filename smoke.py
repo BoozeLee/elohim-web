@@ -15,8 +15,15 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-URL = f"http://127.0.0.1:8780/?nocache={int(time.time())}"
-VAULT_URL = "http://127.0.0.1:8780"   # vault is same-origin as SPA (Phase 16)
+# `main()` honours ELOHIM_SMOKE_URL for the same reason
+# webmcp_contract_assertions() does: a hardcoded port silently tests whatever
+# happens to be listening there, which may be a DIFFERENT tree than the one
+# being edited. A suite that passes while exercising stale code is worse than
+# one that fails — the worktree run hit exactly this, booting the main tree's
+# app.js off port 8780 while the branch under test sat unused.
+SMOKE_URL = os.environ.get("ELOHIM_SMOKE_URL", "http://127.0.0.1:8780/")
+URL = f"{SMOKE_URL.rstrip('/')}/?nocache={int(time.time())}"
+VAULT_URL = SMOKE_URL.rstrip("/")   # vault is same-origin as SPA (Phase 16)
 CANONICAL_SEAL = "5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596"
 
 # ─── Push 22 visual regression (D-J18) ──────────────────────────────
@@ -762,13 +769,22 @@ def main() -> int:
         assert "tools" in discover["result"]["capabilities"]
         print(f"  mcp discover: {discover['result']['protocolVersion']} · {discover['result']['serverInfo']['name']}")
 
-        # tools/list returns all 13.
+        # tools/list must contain the original 13. Push 24 added 12 more, so
+        # this is a SUBSET check, not equality: the exact total is pinned by
+        # the contract assertions (#88b count, #90 tier breakdown), which run
+        # later in webmcp_contract_assertions(). Equality here went stale the
+        # moment a tool was added, and its message only computed the missing
+        # direction — so when the real fault was EXTRA tools it printed
+        # "missing tools: set()" and pointed nowhere.
         listing = page.evaluate(
             "window.elohimMcp.handle({jsonrpc:'2.0', id:2, method:'tools/list'})"
         )
         names = [t["name"] for t in listing["result"]["tools"]]
-        assert set(names) == expected_tools, f"missing tools: {expected_tools - set(names)}"
-        print(f"  mcp tools/list: {len(names)} tools")
+        missing = expected_tools - set(names)
+        assert not missing, f"tools/list dropped original tools: {missing}"
+        assert len(names) == len(set(names)), "tools/list returned duplicates"
+        print(f"  mcp tools/list: {len(names)} tools "
+              f"({len(expected_tools)} original + {len(names) - len(expected_tools)} added)")
 
         # Push 14 (Soul File): three new tools must be present.
         soul_tools = {"elohim_soul_export", "elohim_soul_import", "elohim_soul_verify"}
@@ -1094,7 +1110,7 @@ def main() -> int:
         # The Lab tab rides on stdlib sympy (Pyodide 0.27.8 ships it). Six
         # assertions: #52 tab visible, #54 simplify pyth, #55 verify sympy
         # formally_proven, #57 lab_seal stored to localStorage, #58
-        # WebMCP catalog now has the 3 new tools (total 13), #60 canonical
+        # WebMCP catalog carries the 3 new tools, #60 canonical
         # seal tripwire still intact (regression guard — checked at boot).
         # Assertions #53 (local backend smoke) and #56 (Z3 counterexample)
         # and #59 (artifact export) are wired in Push 18b.
@@ -1111,16 +1127,22 @@ def main() -> int:
         )
         print("  lab tab visible: panel-lab active, discover button rendered ✓")
 
-        # #58 — WebMCP catalog exposes the 3 new lab tools (total = 13).
+        # #58 — WebMCP catalog exposes the 3 new lab tools.
         # Use the polyfill's own tools/list dispatcher — it's the canonical
         # source of truth, and matches what WebMCP/2026-07-28 sees.
+        #
+        # The exact total is deliberately NOT pinned here. This used to assert
+        # == 13, which went stale the moment Push 24 added 12 more tools, and
+        # the failure surfaced as a wall of 25 names rather than a statement
+        # about lab tools. The count is pinned where it belongs — #88b
+        # asserts exactly 25 and #90 pins the tier breakdown — so here the
+        # claim stays what #58 actually means: these three are present.
         listing = page.evaluate(
             "window.elohimMcp.handle({jsonrpc:'2.0', id:2, method:'tools/list'})"
         )
         all_tool_names = [t["name"] for t in listing["result"]["tools"]]
-        assert len(all_tool_names) == 13, (
-            f"expected 13 WebMCP tools, got {len(all_tool_names)}: {all_tool_names}"
-        )
+        assert len(all_tool_names) == len(set(all_tool_names)), (
+            f"tools/list returned duplicates: {all_tool_names}")
         for required in ("elohim_lab_discover", "elohim_lab_simplify",
                          "elohim_lab_verify"):
             assert required in all_tool_names, (

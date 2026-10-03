@@ -5,3 +5,6 @@ __pycache__/
 node_modules/
 .DS_Store
 *.egg-info/
+# Chromium core dumps from a crashed/killed Playwright run
+core.*
+core
