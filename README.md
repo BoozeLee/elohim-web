@@ -11,9 +11,11 @@ Deployed via GitHub Pages on `BoozeLee/elohim-web`. No servers, no build step.
 
 | Path | What it is |
 |---|---|
-| `index.html` | The single-page app. Bootstraps Pyodide, fetches the Python source, exposes the API as `window.elohim.*`. 5 tabs: **awaken**, **create**, **arena**, **codex** (+ boot screen). |
+| `index.html` | The single-page app. Bootstraps Pyodide, fetches the Python source, exposes the API as `window.elohim.*`. 6 tabs: **awaken**, **create**, **arena**, **codex**, **lab**, **webmcp** (+ boot screen). |
 | `py/elohim_summoning/` | The stdlib-only math+sigil instrument, vendored from the monorepo verbatim (11 modules). |
 | `py/elohim_enhanced/` | The numpy-powered creative shard, vendored from the monorepo verbatim (10 modules). |
+| `assets/motion.css` | Vector animation system (Push 19) — 11 keyframes + 10 utility classes + reduced-motion override. Loaded after the inline `<style>` block per Jev decision D-J3. |
+| `assets/motion-mesh.svg` | Animated SVG mesh layer — 6 nodes + 10×6 grid + 4 connecting paths (SMIL primary, CSS fallback per D-J5). Referenced from `index.html` via `<use href="…#mesh">`. |
 | `py/elohim_webapp/bridge.py` | The Pyodide bridge module: pure-Python functions that JS invokes via `pyodide.runPython`. Includes the `alien_codex` Xenomath forge. |
 | `py/elohim_webapp/__init__.py` | Package marker. |
 | `smoke.py` | Local Playwright smoke test — opens the app in headless Chromium, verifies the seal, exercises every public endpoint. |
@@ -111,6 +113,48 @@ It verifies:
 5. `createShard` returns a shard with weights `[5, 5]`.
 6. `interact` runs and produces a `den_expansion` event on the first call.
 7. `setTemperature`, `defy`, `listShards`, `deleteShard` all round-trip.
+
+## Motion system (Push 19)
+
+The webapp applies an expressive, lively motion system to the existing
+"Ghost in the Machine" tone. The implementation is purely CSS + SVG — no
+JavaScript animation libraries, no third-party bundles.
+
+| Layer | File | What it does |
+|---|---|---|
+| Tokens + keyframes + utilities | [`assets/motion.css`](/home/kilisan/elohim-web/assets/motion.css) | 11 `@keyframes`, 10 utility classes (`.motion-fade-rise`, `.motion-glow-pulse`, `.motion-sigil-breathe`, `.motion-badge-shimmer`, `.motion-mesh-bg`, `.motion-tab-reveal`, `.motion-card-lift`, `.motion-draw-stroke`, `.motion-active-glow`, `.motion-spin-slow`), motion duration + easing variables (`--motion-fast`, `--motion-base`, `--motion-slow`, `--ease-standard`, `--ease-emphasized`, `--ease-decel`), and a reduced-motion override (`@media (prefers-reduced-motion: reduce)`). Jev audit block at top of file documents the design decisions (D-J1…D-J10). |
+| Mesh background | [`assets/motion-mesh.svg`](/home/kilisan/elohim-web/assets/motion-mesh.svg) | 6 animated `<circle>` nodes + 10×6 `<line>` grid + 4 connecting `<path>`s, all with SMIL `<animate>` for opacity / `stroke-dashoffset`. CSS fallback for nodes via `.mesh-node` keyframe (D-J5). Container `.motion-mesh-bg` in `motion.css` caps opacity at 0.04 (D-J1) and applies the `motion-mesh-drift` translate animation. |
+
+### Where motion is applied
+
+| Element | Animation | Source |
+|---|---|---|
+| `<header h1>` | `motion-fade-rise` (entrance, 320 ms) | Inline CSS rule in `index.html` |
+| `<span class="seal-mini">` (header seal) | `motion-badge-shimmer` (background-position sweep, 2 s loop) | Inline CSS rule on `header .seal-mini` |
+| `#awaken-sigil` (Penrose sigil card) | `motion-sigil-breathe` (4 s opacity + scale loop) | New CSS rule in `index.html`; existing `sigil-rotate` on the inner `<svg>` is preserved |
+| `.tab.active` | `motion-active-glow` (1.6 s opacity loop, 0.55 → 0.85 per D-J2) | Inline CSS rule on `.tab.active` |
+| `.tab.loading .ready-dot` | `motion-spin-slow` (24 s rotate) layered with the existing `pulse` (1.1 s) | Inline CSS rule on `.tab.loading .ready-dot` |
+| All `.card` elements | `motion-card-lift` on hover (160 ms translate + shadow) | CSS rule in `motion.css` |
+| Body scanlines | Opacity `0.025` → `0.015` (D-J4) | Inline CSS rule on `body::before` |
+
+### Reduced motion
+
+`@media (prefers-reduced-motion: reduce)` is honored at two levels:
+1. The existing global guard in `index.html:59–65` zeros out durations
+   and iteration counts.
+2. The motion.css reduced-motion override (D-J7) explicitly sets
+   `animation: none !important; transition: none !important; transform:
+   none !important; opacity: 1 !important` on every new utility class
+   and on `.card` / `.card:hover`. Belt-and-braces — future contributors
+   deleting one guard must not silently disable the layer.
+
+### Jev decision record
+
+The file-split question (whether to extract `index.html` into smaller
+artifacts as part of this push) was decided by Jev as **defer** — full
+rationale in [`docs/adr/0001-file-split.md`](/home/kilisan/elohim-web/docs/adr/0001-file-split.md).
+The mesh SVG is the only asset extracted (per R-E3 in the plan risk
+table), kept as a single source of truth at `assets/motion-mesh.svg`.
 
 ## How to deploy
 

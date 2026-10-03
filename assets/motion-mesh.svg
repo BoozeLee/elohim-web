@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Push 19 motion mesh — Jev motion system. Per D-J9 + D-J10: 6 animated
+     circle nodes + 10×6 grid lines + 4 connecting paths. SMIL animate
+     is primary; CSS .motion-N-pulse (in motion.css) is the fallback per
+     D-J5.
+
+     Referenced from index.html via:
+       <svg class="motion-mesh-svg" viewBox="0 0 1440 900"
+            preserveAspectRatio="xMidYMid slice">
+         <use href="assets/motion-mesh.svg#mesh"></use>
+       </svg>
+
+     Root svg id="mesh" is the fragment target. -->
+<svg xmlns="http://www.w3.org/2000/svg" id="mesh" viewBox="0 0 1440 900">
+  <g stroke="rgba(232,184,96,0.04)" stroke-width="1" vector-effect="non-scaling-stroke">
+    <line x1="0"    y1="0"   x2="0"    y2="900" />
+    <line x1="144"  y1="0"   x2="144"  y2="900" />
+    <line x1="288"  y1="0"   x2="288"  y2="900" />
+    <line x1="432"  y1="0"   x2="432"  y2="900" />
+    <line x1="576"  y1="0"   x2="576"  y2="900" />
+    <line x1="720"  y1="0"   x2="720"  y2="900" />
+    <line x1="864"  y1="0"   x2="864"  y2="900" />
+    <line x1="1008" y1="0"   x2="1008" y2="900" />
+    <line x1="1152" y1="0"   x2="1152" y2="900" />
+    <line x1="1296" y1="0"   x2="1296" y2="900" />
+    <line x1="0" y1="0"   x2="1440" y2="0"   />
+    <line x1="0" y1="150" x2="1440" y2="150" />
+    <line x1="0" y1="300" x2="1440" y2="300" />
+    <line x1="0" y1="450" x2="1440" y2="450" />
+    <line x1="0" y1="600" x2="1440" y2="600" />
+    <line x1="0" y1="750" x2="1440" y2="750" />
+  </g>
+  <g stroke="rgba(232,184,96,0.06)" stroke-width="1" fill="none" stroke-dasharray="4 4">
+    <path d="M180 180 L540 120 L900 360 L1260 240">
+      <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="6s" repeatCount="indefinite" />
+    </path>
+    <path d="M360 540 L720 720 L1080 600">
+      <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="6s" repeatCount="indefinite" begin="1.5s" />
+    </path>
+    <path d="M540 120 L720 720">
+      <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="6s" repeatCount="indefinite" begin="3s" />
+    </path>
+    <path d="M180 180 L1080 600">
+      <animate attributeName="stroke-dashoffset" from="0" to="-32" dur="6s" repeatCount="indefinite" begin="4.5s" />
+    </path>
+  </g>
+  <g fill="rgba(232,184,96,0.7)">
+    <circle class="mesh-node" cx="180"  cy="180" r="2">
+      <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite" begin="0s" />
+    </circle>
+    <circle class="mesh-node" cx="540"  cy="120" r="2">
+      <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite" begin="0.4s" />
+    </circle>
+    <circle class="mesh-node" cx="900"  cy="360" r="2">
+      <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite" begin="0.8s" />
+    </circle>
+    <circle class="mesh-node" cx="360"  cy="540" r="2">
+      <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite" begin="1.2s" />
+    </circle>
+    <circle class="mesh-node" cx="720"  cy="720" r="2">
+      <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite" begin="1.6s" />
+    </circle>
+    <circle class="mesh-node" cx="1080" cy="600" r="2">
+      <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite" begin="2.0s" />
+    </circle>
+  </g>
+</svg>

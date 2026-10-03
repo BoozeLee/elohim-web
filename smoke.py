@@ -1092,6 +1092,162 @@ def main() -> int:
         # assertion block earlier — this is a regression guard.)
         print(f"  canonical seal tripwire still ✓ (canonical_seal = {_CANONICAL_SEAL[:16]}…)")
 
+        # ---- Push 19 motion system (5 new required assertions) ----
+
+        # #61 — assets/motion.css reachable, Jev audit block + reduced-motion
+        # override present, file size ≤ 8 KB (D-J8). We fetch via Playwright
+        # so this works for both file:// and http:// deploys.
+        motion_css = page.evaluate(
+            """(async () => {
+              const r = await fetch('assets/motion.css', {cache: 'no-store'});
+              const t = await r.text();
+              return {ok: r.ok, status: r.status, len: t.length, body: t};
+            })()"""
+        )
+        assert motion_css["ok"], f"motion.css not reachable: {motion_css}"
+        assert motion_css["len"] > 500, (
+            f"motion.css too small: {motion_css['len']} bytes"
+        )
+        assert motion_css["len"] <= 8 * 1024, (
+            f"motion.css over 8 KB budget (D-J8): {motion_css['len']} bytes"
+        )
+        body = motion_css["body"]
+        assert "motion-fade-rise" in body, "motion.css missing keyframe motion-fade-rise"
+        assert "Jev motion audit (Push 19)" in body, (
+            "motion.css missing Jev audit block"
+        )
+        assert "@media (prefers-reduced-motion: no-preference)" in body or \
+               "@media (prefers-reduced-motion: reduce)" in body, (
+            "motion.css missing reduced-motion override (D-J7)"
+        )
+        print(f"  motion.css: {motion_css['len']} bytes, Jev audit + "
+              f"reduced-motion override present ✓")
+
+        # #62 — motion-mesh SVG (extracted to assets/motion-mesh.svg per R-E3).
+        # We fetch it via HTTP and verify structural contents: 6 circles (D-J9),
+        # 4 paths, at least 6 <animate> elements. We also verify the
+        # <div class="motion-mesh-bg"> is in the main DOM and contains the
+        # <svg> with <use href="assets/motion-mesh.svg#mesh">.
+        mesh_svg = page.evaluate(
+            """(async () => {
+              const r = await fetch('assets/motion-mesh.svg', {cache: 'no-store'});
+              const t = await r.text();
+              return {ok: r.ok, status: r.status, len: t.length, body: t};
+            })()"""
+        )
+        assert mesh_svg["ok"], f"motion-mesh.svg not reachable: {mesh_svg}"
+        mesh_body = mesh_svg["body"]
+        # Count <circle ...> elements (SMIL primary) — D-J9 caps at 6.
+        n_circles = mesh_body.count("<circle")
+        assert n_circles == 6, (
+            f"motion-mesh.svg expected 6 circles (D-J9), got {n_circles}"
+        )
+        # Count <path ...> elements — 4 connecting paths.
+        n_paths = mesh_body.count("<path ")
+        assert n_paths == 4, (
+            f"motion-mesh.svg expected 4 connecting paths, got {n_paths}"
+        )
+        # At least 6 SMIL <animate> elements (one per node + extras for paths).
+        n_animates = mesh_body.count("<animate ")
+        assert n_animates >= 6, (
+            f"motion-mesh.svg expected ≥6 <animate> elements, got {n_animates}"
+        )
+        # Main DOM must have the mesh container + svg + use href reference.
+        mesh_dom = page.evaluate(
+            """({
+              bg: !!document.querySelector('div.motion-mesh-bg'),
+              svg: !!document.querySelector('div.motion-mesh-bg > svg.motion-mesh-svg'),
+              use_href: (document.querySelector('div.motion-mesh-bg use') || {}).getAttribute &&
+                        (document.querySelector('div.motion-mesh-bg use') || {}).getAttribute('href'),
+              opacity: getComputedStyle(document.querySelector('div.motion-mesh-bg') || document.body).opacity,
+            })"""
+        )
+        assert mesh_dom["bg"], "main DOM missing <div class='motion-mesh-bg'>"
+        assert mesh_dom["svg"], "main DOM missing motion-mesh-svg inside bg div"
+        assert mesh_dom["use_href"] and "motion-mesh.svg#mesh" in mesh_dom["use_href"], (
+            f"<use href> not pointing at motion-mesh.svg#mesh: {mesh_dom['use_href']!r}"
+        )
+        # D-J1: opacity capped at 0.05. Computed opacity may be 1 due to
+        # mix-blend-mode + z-index stacking; check the CSS rule via a probe
+        # of the stylesheet (best-effort).
+        css_opacity_cap = page.evaluate(
+            """(() => {
+              for (const sheet of document.styleSheets) {
+                try {
+                  for (const rule of sheet.cssRules) {
+                    if (rule.selectorText && rule.selectorText.includes('.motion-mesh-bg')
+                        && rule.style.opacity) {
+                      return parseFloat(rule.style.opacity);
+                    }
+                  }
+                } catch (e) {}
+              }
+              return null;
+            })()"""
+        )
+        assert css_opacity_cap is None or css_opacity_cap <= 0.05, (
+            f"mesh opacity not capped at 0.05 (D-J1): {css_opacity_cap}"
+        )
+        print(f"  motion-mesh: {n_circles} circles, {n_paths} paths, "
+              f"{n_animates} <animate>, <use href>={mesh_dom['use_href']!r}, "
+              f"opacity cap={css_opacity_cap} ✓")
+
+        # #63 — Reduced-motion override present in motion.css (D-J7 explicit).
+        # This is partly redundant with #61, but called out as its own
+        # assertion so future contributors deleting it from the Jev audit
+        # block get a loud failure.
+        assert "prefers-reduced-motion" in body, (
+            "motion.css missing prefers-reduced-motion media query (D-J7)"
+        )
+        # Specifically: the override should target the new utility classes.
+        assert "motion-fade-rise" in body and "animation: none" in body, (
+            "motion.css prefers-reduced-motion override does not disable "
+            "motion utility classes"
+        )
+        print("  motion.css reduced-motion: override targets utility classes ✓")
+
+        # #64 — Penrose sigil has motion-sigil-breathe class. The CSS rule
+        # adds motion-sigil-breathe to #awaken-sigil (the container). The
+        # sigil SVG itself is JS-injected on first awaken, but the container
+        # is always present. We check that #awaken-sigil has a computed
+        # animation-name that includes motion-sigil-breathe.
+        sigil_anim = page.evaluate(
+            """(() => {
+              const el = document.querySelector('#awaken-sigil');
+              if (!el) return null;
+              const cs = getComputedStyle(el);
+              return {
+                exists: true,
+                animationName: cs.animationName,
+                animationDuration: cs.animationDuration,
+              };
+            })()"""
+        )
+        assert sigil_anim and sigil_anim["exists"], (
+            "#awaken-sigil element missing from DOM"
+        )
+        assert "motion-sigil-breathe" in (sigil_anim["animationName"] or ""), (
+            f"#awaken-sigil missing motion-sigil-breathe animation: "
+            f"{sigil_anim['animationName']!r}"
+        )
+        print(f"  sigil breathe: animation-name={sigil_anim['animationName']!r} ✓")
+
+        # #65 — All 6 tabs (awaken / create / arena / codex / lab / webmcp)
+        # can be clicked and their panels become active.
+        all_tabs = ["awaken", "create", "arena", "codex", "lab", "webmcp"]
+        for tab in all_tabs:
+            activated = page.evaluate(
+                f"""(document.querySelector('.tab[data-tab="{tab}') || {{}}).click();
+                !!document.querySelector('#panel-{tab}.active')"""
+            )
+            assert activated, f"tab {tab!r} did not activate its panel"
+            # Header seal must remain canonical through all tab switches.
+            header_seal_now = page.locator("#header-seal").inner_text()
+            assert CANONICAL_SEAL[:16] in header_seal_now, (
+                f"seal drifted after clicking {tab}: {header_seal_now!r}"
+            )
+        print(f"  all 6 tabs: {', '.join(all_tabs)} activated, seal stable ✓")
+
         browser.close()
     return 0
 

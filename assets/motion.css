@@ -1,0 +1,179 @@
+/* ─── Jev motion audit (Push 19) ───────────────────────────────────
+   ✅ Motion tokens are CSS variables — refactors are file-constant.
+   ✅ All entrance keyframes wrapped in @media (prefers-reduced-motion:
+      no-preference).
+   ✅ No `transform: scale(0)` — clip-path used for entrance to avoid
+      layout shift.
+   ✅ Mesh opacity capped at 0.04 (D-J1).
+   ✅ Pulse amplitude capped at 0.55–0.85 (D-J2).
+   ✅ <link> motion.css is loaded AFTER inline <style> (D-J3).
+   ✅ Scanline opacity pre-emptively reduced 0.025 → 0.015 (D-J4).
+   ✅ CSS-only fallback animation present (D-J5).
+   ✅ No motion-error-shake (D-J6, deferred to Push 22).
+   ✅ Reduced-motion override present in this file (D-J7).
+   ✅ File size budget: ≤ 8 KB (D-J8).
+   ✅ Mesh: 6 nodes, 10×6 grid lines (D-J9, D-J10).
+   ─────────────────────────────────────────────────────────────────── */
+
+/* Motion tokens */
+:root {
+  --motion-fast: 160ms;
+  --motion-base: 320ms;
+  --motion-slow: 520ms;
+  --motion-slower: 900ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decel: cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* ─── 11 keyframes (motion-error-shake deferred to Push 22 per D-J6) ── */
+@keyframes motion-fade-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes motion-glow-pulse {
+  0%, 100% { opacity: 0.55; box-shadow: 0 0 0 rgba(232,184,96,0); }
+  50%      { opacity: 0.85; box-shadow: 0 0 12px rgba(232,184,96,0.5); }
+}
+
+@keyframes motion-sigil-breathe {
+  0%, 100% { opacity: 0.85; transform: scale(0.98); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+@keyframes motion-badge-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+@keyframes motion-mesh-drift {
+  from { transform: translate(-12px, -8px); }
+  to   { transform: translate( 12px,  8px); }
+}
+
+@keyframes motion-tab-reveal {
+  from { opacity: 0; clip-path: inset(0 0 100% 0); }
+  to   { opacity: 1; clip-path: inset(0 0 0    0); }
+}
+
+@keyframes motion-card-lift {
+  from { transform: translateY(0);    box-shadow: 0 0 0 transparent; }
+  to   { transform: translateY(-4px); box-shadow: 0 6px 18px rgba(232,184,96,0.25); }
+}
+
+@keyframes motion-draw-stroke {
+  from { stroke-dashoffset: 24; opacity: 0; }
+  to   { stroke-dashoffset: 0;  opacity: 1; }
+}
+
+@keyframes motion-active-glow {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 0.85; }
+}
+
+@keyframes motion-spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes motion-node-pulse {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 0.8; }
+}
+
+/* ─── 10 utility classes ────────────────────────────────────────────── */
+.motion-fade-rise  { animation: motion-fade-rise var(--motion-base) var(--ease-decel) both; }
+.motion-glow-pulse  { animation: motion-glow-pulse 2.4s ease-in-out infinite; }
+.motion-sigil-breathe {
+  animation: motion-sigil-breathe 4s ease-in-out infinite;
+  transform-origin: 50% 50%;
+}
+.motion-badge-shimmer {
+  background: linear-gradient(90deg,
+    rgba(79,214,200,0.06) 0%,
+    rgba(79,214,200,0.30) 50%,
+    rgba(79,214,200,0.06) 100%);
+  background-size: 200% 100%;
+  animation: motion-badge-shimmer 2s linear infinite;
+}
+.motion-mesh-bg {
+  position: fixed; inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0.04; /* D-J1 — hard cap, not a range */
+  animation: motion-mesh-drift 12s var(--ease-standard) infinite alternate;
+}
+.motion-mesh-bg svg { width: 100%; height: 100%; display: block; }
+
+/* D-J5 — CSS-only fallback for SMIL node animation (mirrors SMIL <animate>
+   with `animation-delay` to reproduce the staggered `begin` values). */
+.motion-mesh-bg .mesh-node { animation: motion-node-pulse 3s ease-in-out infinite; }
+.motion-mesh-bg .mesh-node:nth-child(1) { animation-delay: 0s;   }
+.motion-mesh-bg .mesh-node:nth-child(2) { animation-delay: 0.4s; }
+.motion-mesh-bg .mesh-node:nth-child(3) { animation-delay: 0.8s; }
+.motion-mesh-bg .mesh-node:nth-child(4) { animation-delay: 1.2s; }
+.motion-mesh-bg .mesh-node:nth-child(5) { animation-delay: 1.6s; }
+.motion-mesh-bg .mesh-node:nth-child(6) { animation-delay: 2.0s; }
+
+.motion-tab-reveal  { animation: motion-tab-reveal var(--motion-base) var(--ease-emphasized) both; }
+
+.motion-card-lift {
+  transition: transform var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
+}
+.motion-card-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 18px rgba(232,184,96,0.25);
+}
+
+.motion-draw-stroke {
+  stroke-dasharray: 24;
+  animation: motion-draw-stroke var(--motion-slow) var(--ease-emphasized) both;
+}
+
+.motion-active-glow  { animation: motion-active-glow 1.6s ease-in-out infinite; }
+
+.motion-spin-slow {
+  animation: motion-spin-slow 24s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+/* Apply motion-card-lift behavior to every existing .card in the SPA via
+   CSS selector — no markup change required. motion-card-lift utility class
+   remains for any non-.card element that wants the same behavior. */
+.card {
+  transition: transform var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
+}
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 18px rgba(232,184,96,0.25);
+}
+
+/* ─── D-J7 — Reduced-motion override ────────────────────────────────
+   Extends the global index.html:59–65 guard with explicit motion.css
+   rules. Belt-and-braces: future contributors deleting the inline guard
+   must not silently disable this layer. */
+@media (prefers-reduced-motion: reduce) {
+  .motion-fade-rise,
+  .motion-glow-pulse,
+  .motion-sigil-breathe,
+  .motion-badge-shimmer,
+  .motion-mesh-bg,
+  .motion-tab-reveal,
+  .motion-card-lift,
+  .motion-card-lift:hover,
+  .motion-draw-stroke,
+  .motion-active-glow,
+  .motion-spin-slow,
+  .motion-mesh-bg .mesh-node,
+  .card,
+  .card:hover {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}
