@@ -137,6 +137,10 @@ after each push land in `elohim_lab.service.LabService`.
 ## Threat model
 
 - All lab routes bind to `127.0.0.1` — no public exposure.
+- CORS is permissive (`allow_origins=["*"]`) because the smoke harness
+  reaches FastAPI from a different port (`8780` for the smoke vs `:8791`
+  for vault vs `:8793` for standalone lab). Production deploys run lab
+  + SPA on the same origin so the wildcard CORS is harmless.
 - No auth (matches vault + marketplace policy). Free tier = unlimited
   local runs.
 - Inputs are typed Pydantic models — FastAPI rejects malformed
@@ -145,8 +149,9 @@ after each push land in `elohim_lab.service.LabService`.
   julia_sr, lean_verify}` via `Literal` — unknown backends return 422.
 - No `eval`/`exec`/`shell=True`. All subprocess calls use list-form
   `subprocess.run([...], timeout=…)`.
-- Julia / Lean subprocess output is capped at 4 KB to avoid runaway
-  logs.
+- Julia / Lean subprocess output is capped at 4 KB (the shared
+  `SUBPROCESS_OUTPUT_CAP_BYTES` constant in `elohim_lab.constants`) to
+  avoid runaway logs.
 - Z3 runs in-process; sympy runs in-process. Julia and Lean are
   isolated subprocesses.
 
