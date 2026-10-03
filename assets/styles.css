@@ -356,7 +356,14 @@
   main { padding: 28px; max-width: 1180px; margin: 0 auto; position: relative; z-index: 2; }
   .panel { display: none; }
   .panel.active { display: block; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  /* minmax(0,1fr), not 1fr. A grid track sized `1fr` has an implicit
+     min-width:auto, so a single wide child (the invocation <input>, a
+     <pre>, a long unbroken string) refuses to shrink below its content
+     and pushes the whole page into horizontal scroll. On a 320px screen
+     this produced a 427px card inside a 240px column. The `0` lets the
+     track actually shrink. Push 22 worked around a symptom of this
+     (.row > .status-pill { flex: 0 0 auto }) without touching the cause. */
+  .grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 18px; }
   .card {
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -549,7 +556,9 @@
   .event.reflection { border-left-color: var(--accent); }
   .event.consolidation { border-left-color: var(--green); }
   .row { display: flex; gap: 8px; align-items: center; }
-  .row > * { flex: 1; }
+  /* min-width:0 so a flex child may shrink below its content width —
+     same trap as the grid track above. */
+  .row > * { flex: 1 1 0; min-width: 0; }
   .stack { display: flex; flex-direction: column; gap: 12px; }
   .toast-host { position: fixed; top: 80px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; max-width: 360px; }
   /* MCP inspector JSON validity dot */

@@ -36,6 +36,47 @@ document.addEventListener("keydown", (e) => {
 const _themeToggleBtn = document.getElementById("theme-toggle");
 if (_themeToggleBtn) _themeToggleBtn.addEventListener("click", toggleTheme);
 
+// ═══ Push 25 — ghost stage ══════════════════════════════════════════
+// The stage is decorative; it carries no information. The one thing it
+// does borrow from the app is the tool count, which is real data and
+// already published in tools.manifest.json — so it is read from the live
+// table rather than hardcoded, and it would be wrong if the table grew.
+(function initGhostStage() {
+  const canvas = document.getElementById("ghost-field");
+  if (!canvas || typeof window.GhostField !== "function") return;
+  const field = new window.GhostField(canvas);
+  field.attach();
+
+  const count = document.getElementById("stage-tool-count");
+  const paint = () => {
+    const n = window.__elohimToolNames ? window.__elohimToolNames().length : null;
+    if (count && n) count.textContent = String(n);
+  };
+  paint();
+  // Tool registration is async relative to first paint; re-read once the
+  // page has settled rather than guessing a delay.
+  document.addEventListener("elohim:tools-ready", paint, { once: true });
+  window.addEventListener("load", paint, { once: true });
+})();
+
+// The sticky nav sits directly under the sticky masthead, so it needs the
+// masthead's REAL height — which is 45px on desktop but 103px on a phone
+// once the meta line wraps. A hardcoded offset was wrong at every width
+// but one, and the nav slid under the masthead. Measured, not guessed.
+(function publishMastheadHeight() {
+  const mast = document.querySelector(".masthead");
+  if (!mast) return;
+  const publish = () => {
+    const h = Math.round(mast.getBoundingClientRect().height);
+    document.documentElement.style.setProperty("--mast-h", h + "px");
+  };
+  publish();
+  if ("ResizeObserver" in window) new ResizeObserver(publish).observe(mast);
+  window.addEventListener("resize", publish, { passive: true });
+  // Web fonts land after first paint and change the masthead height.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(publish);
+})();
+
 // ═══ Push 22 — UX copy + onboarding ════════════════════════════════
 // Three components, all theme-aware by construction (they read tokens
 // from design-tokens.css) and all keyboard-reachable.
@@ -906,10 +947,14 @@ async function runAwaken(noSvg) {
     $("#awaken-copy").disabled = !r.seal;
     $("#awaken-show-facts").disabled = !r.facts;
     if (r.sigil_svg) {
+      // Drop the short empty-state reservation now that there is real art
+      // to hold — the full-height rule comes back with the content.
+      $("#awaken-sigil").classList.remove("is-empty");
       $("#awaken-sigil").innerHTML = r.sigil_svg;
       $("#awaken-download").disabled = false;
       $("#awaken-png").disabled = false;
     } else {
+      $("#awaken-sigil").classList.add("is-empty");
       $("#awaken-sigil").innerHTML = '<span style="color:var(--fg-soft)">(no svg — no_svg flag set)</span>';
       $("#awaken-download").disabled = true;
       $("#awaken-png").disabled = true;
@@ -2286,6 +2331,16 @@ function runTool(tool, args) {
   return tool.invoke(args || {});
 }
 
+// Tell the page that the tool surface is final. The ghost stage reads the
+// count off the live table rather than hardcoding it, and it needs to know
+// when to re-read — guessing a timeout would be the same class of bug as
+// a projection that drops a field.
+function announceToolsReady() {
+  document.dispatchEvent(new CustomEvent("elohim:tools-ready", {
+    detail: { count: WEBMCP_TOOLS.length },
+  }));
+}
+
 // Exposed for the smoke harness and the in-page inspector. The harness
 // asserts against the app's own declared table, not the browser's view:
 // readOnlyHint/untrustedContentHint are write-only and never come back
@@ -2367,6 +2422,7 @@ async function registerWebMcpTools() {
     status.className = "ok";
     status.innerHTML = `✓ registered <strong>${webmcpRegistered.length}</strong> tool(s) via <code>${escapeHtml(via)}</code> · polyfill <code>window.elohimMcp</code> also active.`;
     list.innerHTML = toolsLine;
+    announceToolsReady();
     return;
   }
 
@@ -2380,6 +2436,7 @@ async function registerWebMcpTools() {
   status.innerHTML =
     `✓ MCP 2026-07-28 server <em>always-on</em> via polyfill · ${webmcpRegistered.length || WEBMCP_TOOLS.length} tool(s) ready · transports: ${transports.join(" + ")}.`;
   list.innerHTML = toolsLine;
+  announceToolsReady();
 }
 
 $("#webmcp-register").addEventListener("click", () => registerWebMcpTools());
