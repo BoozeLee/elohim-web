@@ -1248,6 +1248,123 @@ def main() -> int:
             )
         print(f"  all 6 tabs: {', '.join(all_tabs)} activated, seal stable ✓")
 
+        # ---- Push 20 design tokens + theme toggle (3 new required) ----
+
+        # #66 — assets/design-tokens.css reachable + Jev audit block + size
+        # budget ≤ 4 KB (per the Push 20 plan). The semantic alias
+        # --color-bg-0 must also resolve to a real value via var().
+        design_tokens = page.evaluate(
+            """(async () => {
+              const r = await fetch('assets/design-tokens.css', {cache: 'no-store'});
+              const t = await r.text();
+              return {ok: r.ok, status: r.status, len: t.length, body: t};
+            })()"""
+        )
+        assert design_tokens["ok"], (
+            f"design-tokens.css not reachable: {design_tokens}"
+        )
+        assert design_tokens["len"] > 500, (
+            f"design-tokens.css tiny: {design_tokens['len']} bytes"
+        )
+        assert design_tokens["len"] <= 4 * 1024, (
+            f"design-tokens.css over 4 KB budget: {design_tokens['len']} bytes"
+        )
+        dt_body = design_tokens["body"]
+        assert "Jev audit (Push 20)" in dt_body, (
+            "design-tokens.css missing Jev audit block"
+        )
+        # All semantic alias declarations must be present.
+        for token in (
+            "--color-bg-0", "--color-bg-1", "--color-bg-2",
+            "--color-fg-0", "--color-fg-1", "--color-fg-2",
+            "--color-accent", "--color-teal", "--color-green",
+            "--color-red", "--color-purple",
+            "--space-1", "--space-8",
+            "--radius-sm", "--radius-md", "--radius-lg",
+            "--type-base", "--type-3xl",
+            "--shadow-1", "--shadow-2", "--shadow-3",
+        ):
+            assert token in dt_body, f"missing semantic token {token!r}"
+        # Light theme block must exist with D-J11 hex values.
+        assert "[data-theme=\"light\"]" in dt_body, (
+            "design-tokens.css missing [data-theme=light] block"
+        )
+        assert "#faf7f2" in dt_body, (
+            "design-tokens.css light theme missing Jev-locked bg-0 (#faf7f2)"
+        )
+        print(f"  design-tokens.css: {design_tokens['len']} bytes, "
+              f"Jev audit + 20 semantic tokens + light theme present ✓")
+
+        # #67 — clicking the #theme-toggle flips data-theme AND
+        # --color-bg-0 (the semantic alias) changes computed value. We
+        # read the value before, click, read after, and verify the swap.
+        bg_before = page.evaluate(
+            "getComputedStyle(document.documentElement).getPropertyValue('--color-bg-0').trim()"
+        )
+        theme_before = page.evaluate(
+            "document.documentElement.dataset.theme"
+        )
+        page.click("#theme-toggle")
+        page.wait_for_function(
+            f"document.documentElement.dataset.theme !== '{theme_before}'",
+            timeout=5000,
+        )
+        bg_after = page.evaluate(
+            "getComputedStyle(document.documentElement).getPropertyValue('--color-bg-0').trim()"
+        )
+        theme_after = page.evaluate(
+            "document.documentElement.dataset.theme"
+        )
+        assert theme_before != theme_after, (
+            f"theme did not flip: {theme_before!r} → {theme_after!r}"
+        )
+        assert bg_before != bg_after, (
+            f"--color-bg-0 did not change: {bg_before!r} → {bg_after!r} "
+            f"(tokens not aliased to --bg-deepest?)"
+        )
+        # Toggle again to restore original theme (so subsequent runs are
+        # unaffected by side effects).
+        page.click("#theme-toggle")
+        page.wait_for_function(
+            f"document.documentElement.dataset.theme === '{theme_before}'",
+            timeout=5000,
+        )
+        print(f"  theme toggle: {theme_before!r} → {theme_after!r}, "
+              f"--color-bg-0 {bg_before!r} → {bg_after!r} ✓")
+
+        # #68 — theme persists to localStorage and survives a reload.
+        # We set a known theme, reload, and verify the new page still
+        # has the same data-theme + localStorage entry.
+        page.evaluate(
+            """(() => {
+              localStorage.setItem('elohim.theme', 'light');
+              document.documentElement.dataset.theme = 'light';
+            })()"""
+        )
+        page.reload()
+        page.wait_for_selector("#boot.hidden", state="attached", timeout=120000)
+        post_reload_theme = page.evaluate(
+            "document.documentElement.dataset.theme"
+        )
+        post_reload_storage = page.evaluate(
+            "localStorage.getItem('elohim.theme')"
+        )
+        assert post_reload_theme == "light", (
+            f"theme did not persist across reload: {post_reload_theme!r}"
+        )
+        assert post_reload_storage == "light", (
+            f"localStorage did not persist: {post_reload_storage!r}"
+        )
+        # Reset to default (dark) for any subsequent runs.
+        page.evaluate(
+            """(() => {
+              localStorage.removeItem('elohim.theme');
+              document.documentElement.dataset.theme = 'dark';
+            })()"""
+        )
+        print(f"  theme persists: localStorage={post_reload_storage!r}, "
+              f"post-reload data-theme={post_reload_theme!r} ✓")
+
         browser.close()
     return 0
 

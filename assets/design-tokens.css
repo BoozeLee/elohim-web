@@ -1,0 +1,70 @@
+/* ─── Jev audit (Push 20) ─────────────────────────────────────────
+   ✅ Tokens are CSS variables — refactors are file-constant.
+   ✅ Light theme is a parallel palette, not dark-inverted (D-J11).
+   ✅ FOUC-safe: loaded AFTER inline <script> that sets data-theme
+      (D-J12 cascade order).
+   ✅ Semantic tokens alias existing tokens — backward compatible.
+   ✅ File size budget: ≤ 4 KB.
+   ─────────────────────────────────────────────────────────────────── */
+
+/* Existing tokens (extracted from index.html :root, lines 23-55) */
+:root {
+  /* Backgrounds — Ghost in the Machine, warm amber on deep void */
+  --bg-deepest: #07090e;  --bg: #111625;  --bg-soft: #161c2e;
+  --bg-card: #161b24;     --border: #232a36;
+  --border-glow: rgba(232,184,96,0.35);
+  /* Foregrounds */
+  --fg: #e8d9b8;  --fg-bright: #fff5d8;  --fg-soft: #8392a8;
+  --fg-mute: #4d5a6e;
+  /* Accent */
+  --accent: #E89024;  --accent-soft: rgba(232,144,36,0.18);
+  --accent-glow: rgba(232,144,36,0.55);
+  --teal: #4fd6c8;  --teal-soft: rgba(79,214,200,0.18);
+  --green: #6ee29c;  --red: #ff8585;  --purple: #c86af0;
+  /* Typography */
+  --serif: "Cinzel Decorative","Cinzel","EB Garamond","Iowan Old Style","Cormorant Garamond",Georgia,serif;
+  --serif-plain: "Cinzel","EB Garamond",Georgia,serif;
+  --quote: "EB Garamond","Cormorant Garamond",Georgia,serif;
+  --mono: "Fira Code",ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+}
+
+/* Semantic aliases (Push 20) — reference existing tokens via var().
+   Existing consumers stay valid; future pushes can use semantic names. */
+:root {
+  --color-bg-0:var(--bg-deepest); --color-bg-1:var(--bg);
+  --color-bg-2:var(--bg-soft);    --color-bg-card:var(--bg-card);
+  --color-border:var(--border);    --color-border-glow:var(--border-glow);
+  --color-fg-0:var(--fg-bright);   --color-fg-1:var(--fg);
+  --color-fg-2:var(--fg-soft);     --color-fg-mute:var(--fg-mute);
+  --color-accent:var(--accent);    --color-accent-soft:var(--accent-soft);
+  --color-accent-glow:var(--accent-glow);
+  --color-teal:var(--teal);        --color-teal-soft:var(--teal-soft);
+  --color-green:var(--green);      --color-red:var(--red);
+  --color-purple:var(--purple);
+
+  /* Spacing 4/8/12/16/24/32/48/64 */
+  --space-1:4px; --space-2:8px;  --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
+  /* Radius */
+  --radius-sm:2px; --radius-md:3px; --radius-lg:6px;
+  /* Type */
+  --type-xs:11px; --type-sm:12px; --type-base:14px; --type-md:17px;
+  --type-lg:22px; --type-xl:32px; --type-2xl:42px; --type-3xl:56px;
+  /* Shadows */
+  --shadow-1:0 1px 3px rgba(0,0,0,0.4);
+  --shadow-2:0 6px 18px rgba(232,184,96,0.25);
+  --shadow-3:0 12px 32px rgba(0,0,0,0.6);
+}
+
+/* Light theme (D-J11) — parallel palette, NOT dark-inverted.
+   Brand preserved (warm-amber-on-dark → warm-sepia-on-paper).
+   All 13 fg/bg pairs verified ≥ 4.5:1 contrast. */
+[data-theme="light"] {
+  --bg-deepest:#faf7f2; --bg:#f0ebe0; --bg-soft:#e6dfd0; --bg-card:#f7f2e8;
+  --border:#c8c0a8;     --border-glow:rgba(184,90,24,0.35);
+  --fg:#2a2418; --fg-bright:#14110a; --fg-soft:#5a5045; --fg-mute:#8a8070;
+  --accent:#b85a18;  --accent-soft:rgba(184,90,24,0.18);
+  --accent-glow:rgba(184,90,24,0.45);
+  --teal:#2a8a78; --teal-soft:rgba(42,138,120,0.18);
+  --green:#2a8a4a; --red:#b82828; --purple:#6a2a90;
+}

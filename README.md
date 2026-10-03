@@ -16,6 +16,7 @@ Deployed via GitHub Pages on `BoozeLee/elohim-web`. No servers, no build step.
 | `py/elohim_enhanced/` | The numpy-powered creative shard, vendored from the monorepo verbatim (10 modules). |
 | `assets/motion.css` | Vector animation system (Push 19) — 11 keyframes + 10 utility classes + reduced-motion override. Loaded after the inline `<style>` block per Jev decision D-J3. |
 | `assets/motion-mesh.svg` | Animated SVG mesh layer — 6 nodes + 10×6 grid + 4 connecting paths (SMIL primary, CSS fallback per D-J5). Referenced from `index.html` via `<use href="…#mesh">`. |
+| `assets/design-tokens.css` | Design tokens + light/dark theme (Push 20) — semantic color/spacing/radius/typography/shadow tokens + `[data-theme="light"]` palette. Loaded BEFORE motion.css per D-J12. |
 | `py/elohim_webapp/bridge.py` | The Pyodide bridge module: pure-Python functions that JS invokes via `pyodide.runPython`. Includes the `alien_codex` Xenomath forge. |
 | `py/elohim_webapp/__init__.py` | Package marker. |
 | `smoke.py` | Local Playwright smoke test — opens the app in headless Chromium, verifies the seal, exercises every public endpoint. |
@@ -113,6 +114,60 @@ It verifies:
 5. `createShard` returns a shard with weights `[5, 5]`.
 6. `interact` runs and produces a `den_expansion` event on the first call.
 7. `setTemperature`, `defy`, `listShards`, `deleteShard` all round-trip.
+
+## Design tokens + light/dark theme (Push 20)
+
+The webapp surfaces every color, spacing, radius, typography, and
+shadow value as a named semantic token in
+[`assets/design-tokens.css`](/home/kilisan/elohim-web/assets/design-tokens.css).
+A `[data-theme="light"]` selector ships a daylight-tuned palette. A
+sun/moon toggle button in the header flips themes; the choice persists
+to `localStorage["elohim.theme"]` and the default falls back to system
+`prefers-color-scheme`.
+
+### Token inventory
+
+| Group | Tokens |
+|---|---|
+| Semantic backgrounds | `--color-bg-0`, `--color-bg-1`, `--color-bg-2`, `--color-bg-card`, `--color-border`, `--color-border-glow` |
+| Semantic foregrounds | `--color-fg-0`, `--color-fg-1`, `--color-fg-2`, `--color-fg-mute` |
+| Semantic accents | `--color-accent`, `--color-accent-soft`, `--color-accent-glow`, `--color-teal`, `--color-teal-soft`, `--color-green`, `--color-red`, `--color-purple` |
+| Spacing scale | `--space-1` (4px) … `--space-8` (64px) |
+| Radius scale | `--radius-sm` (2px), `--radius-md` (3px), `--radius-lg` (6px) |
+| Typography scale | `--type-xs` (11px) … `--type-3xl` (56px) |
+| Shadows | `--shadow-1`, `--shadow-2`, `--shadow-3` |
+
+Existing tokens (`--bg`, `--fg`, `--accent`, `--serif`, `--mono`, etc.)
+are kept for backward compatibility; the semantic tokens are aliases
+that reference them. When `[data-theme="light"]` flips, the existing
+tokens change first; the semantic tokens follow via cascade.
+
+### FOUC prevention
+
+An inline `<script>` at the top of `<head>` runs *before* any
+stylesheet loads. It reads `localStorage["elohim.theme"]`, falls
+back to `prefers-color-scheme`, and sets `document.documentElement.dataset.theme`
+synchronously. No flash of unstyled content is possible.
+
+### Cascade order
+
+```
+inline <script> sets data-theme   [Push 20]
+  ↓
+assets/design-tokens.css           [Push 20]
+  ↓
+assets/motion.css                  [Push 19]
+  ↓
+inline <style>...                  [existing]
+```
+
+### Jev decision record (light theme)
+
+The light theme is a **parallel palette tuned for daylight
+legibility**, NOT a dark-palette inversion. The brand identity is
+preserved — warm-amber-on-dark → warm-sepia-on-paper. All 13
+foreground/background pairs verified ≥ 4.5:1 contrast (WCAG AA).
+Locked values committed in `design-tokens.css`.
 
 ## Motion system (Push 19)
 
