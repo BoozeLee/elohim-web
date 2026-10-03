@@ -2030,12 +2030,32 @@ def webmcp_contract_assertions() -> int:
 
     Runs outside main()'s browser so the existing suite's state cannot
     mask a registration failure. Uses the Tier-1 fake by default.
+
+    Two opt-in flags, both read from argv so they work whether this is
+    called from main() or directly via `python3 -c "import smoke; ..."`:
+
+      --conformance    Swap the injected fake for genuine Chromium's
+                       WebMCP runtime. Requires an upstream-internal
+                       feature flag, so it is opt-in by design: if the
+                       flag is renamed upstream this FAILS LOUDLY rather
+                       than silently skipping.
+      --with-external  Additionally invoke elohim_forge_vision, the one
+                       real third-party tool. Slow, rate-limited, and
+                       non-deterministic — never part of the default run.
     """
     from webmcp_probe import ModelContextProbe, DEFAULT_URL
 
     url = os.environ.get("ELOHIM_SMOKE_URL", DEFAULT_URL)
+    conformance = "--conformance" in sys.argv[1:]
+    with_external = "--with-external" in sys.argv[1:]
+    if conformance:
+        print("· --conformance: using the real Chromium WebMCP runtime "
+              "(requires an upstream-internal feature flag)")
+    if with_external:
+        print("· --with-external: elohim_forge_vision will call a real "
+              "third-party image API (slow, rate-limited)")
 
-    with ModelContextProbe(url=url) as probe:
+    with ModelContextProbe(url=url, real_runtime=conformance) as probe:
         page = probe.page
         page.goto(url)
         page.wait_for_selector("#boot.hidden", state="attached", timeout=300000)
@@ -2133,6 +2153,54 @@ def webmcp_contract_assertions() -> int:
         assert d == {"readOnlyHint": True, "untrustedContentHint": True}, d
         print(f"  ✓ #83 annotations derived from risk "
               f"(pure→readOnly, untrusted→untrustedContent)")
+
+        # #83b — the table must be a FAITHFUL projection of the tool
+        # definition. Found by measuring, not by reading: __elohimToolTable()
+        # destructured only {name, description, inputSchema, risk,
+        # verification} and silently dropped `untrusted`. 18 of the 25 tools
+        # declare untrusted:true, so every one of them derived
+        # untrustedContentHint:false — and because gen_manifest.py derives
+        # its annotations from that same table, tools.manifest.json published
+        # the wrong value to agents as a faithful-looking build artifact.
+        #
+        # #83 above cannot catch this: it tests deriveAnnotations() with
+        # synthetic objects, so it proves the FUNCTION is right while saying
+        # nothing about whether the real table feeds it the field. And #89's
+        # cross-check cannot either — committed and derived both read the
+        # lossy table, so the two agree on a systematically wrong value.
+        # The guard has to compare the table against app.js itself.
+        table_untrusted = {
+            t["name"] for t in table if t.get("untrusted") is True
+        }
+        actual_untrusted = page.evaluate(
+            """() => {
+                const names = [];
+                for (const t of window.__elohimToolTable()) {
+                    const d = window.__elohimDeriveAnnotations(t);
+                    if (d.untrustedContentHint === true) names.push(t.name);
+                }
+                return names;
+            }""")
+        assert len(actual_untrusted) > 0, (
+            "no tool derives untrustedContentHint:true — the table is almost "
+            "certainly not carrying `untrusted` anymore, so every tool is "
+            "being advertised as returning trusted content")
+        # Spot-check the derivation actually agrees with the declaration, per
+        # tool, rather than only that some tool is untrusted.
+        for name in actual_untrusted:
+            assert name in table_untrusted, (
+                f"{name} derives untrustedContentHint:true but the table says "
+                f"otherwise — table and derivation disagree")
+        # And the converse: anything declared untrusted must reach the hint.
+        declared_via_page = page.evaluate(
+            """() => window.__elohimToolTable()
+                   .filter(t => t.untrusted === true).map(t => t.name)""")
+        assert set(declared_via_page) == set(actual_untrusted), (
+            f"{len(declared_via_page)} tools declare untrusted but "
+            f"{len(actual_untrusted)} derive the hint — the projection drops "
+            f"the field")
+        print(f"  ✓ #83b table is faithful: {len(actual_untrusted)}/{len(table)} "
+              f"tools declare untrusted and derive untrustedContentHint:true")
 
         # #85 — Review Focus #1 and #2. Risk is MEASURED, not declared.
         #
@@ -2417,8 +2485,97 @@ def webmcp_contract_assertions() -> int:
                 down["payload"].get("error", "")).lower(), down["payload"]
             print(f"  ✓ #RF4 backend down: structured ok:false, no hang, "
                   f"no half-applied state")
+
+            # --with-external — the only tool that leaves the machine. Off by
+            # default because pollinations.ai is slow, rate-limited, and
+            # NON-DETERMINISTIC: a flaky failure here would be
+            # indistinguishable from a contract regression, which is worse
+            # than not running it at all. Routed through the app's own
+            # JSON-RPC handler rather than mc.callTool() so it exercises the
+            # same path an agent uses under both the fake and the real
+            # runtime.
+            if with_external:
+                ext = page.evaluate("""async () => {
+                  const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+                    method:'tools/call',
+                    params:{name:'elohim_forge_vision',
+                            arguments:{invocation:'ELOHIM:AWAKEN'}}});
+                  const res = r && r.result;
+                  let payload = null;
+                  try { payload = JSON.parse(res.content[0].text); } catch (e) {}
+                  return {isError: res && res.isError, payload};
+                }""")
+                assert ext["payload"] is not None, (
+                    f"forge_vision returned no parseable payload: {ext}")
+                assert ext["payload"].get("ok") is True, (
+                    f"forge_vision did not report success: {ext['payload']}")
+                assert str(ext["payload"].get("data_url", "")).startswith(
+                    "data:image/"), (
+                    f"forge_vision returned no image: {ext['payload']}")
+                print("  ✓ --with-external: elohim_forge_vision returned a "
+                      "real third-party image")
+            else:
+                print("  · elohim_forge_vision (external tier): not invoked "
+                      "(--with-external to opt in)")
+
+            # Read everything #89/#90 need NOW, while this page is still
+            # open. The `with` block closes `probe` on exit, and this inner
+            # block rebinds `page` — so after it, the name refers to a CLOSED
+            # page. Evaluating then raises "Target page closed" instead of
+            # testing anything. Capture the plain data first, assert after.
+            live = page.evaluate("() => window.__elohimToolTable()")
+            counts = page.evaluate("() => window.__elohimVerificationCounts()")
+            # Annotations as the RUNTIME derives them. Comparing these to the
+            # committed manifest is a genuine JS↔file cross-check; comparing
+            # gen_manifest against itself would only prove the generator is
+            # self-consistent, and would stay green if app.js's
+            # deriveAnnotations silently changed.
+            derived = page.evaluate(
+                """() => window.__elohimToolTable()
+                       .map(t => window.__elohimDeriveAnnotations(t))""")
     finally:
         stubs.close()
+
+    # #89 — the committed manifest matches the runtime table exactly.
+    # Resolved against smoke.py's own directory, not cwd: a bare
+    # `python3 smoke.py` from another directory must read the same committed
+    # file, or this guard silently passes against a stale local copy.
+    import gen_manifest
+    manifest_path = Path(__file__).resolve().parent / "tools.manifest.json"
+    assert manifest_path.exists(), f"missing {manifest_path.name}"
+    committed = json.loads(manifest_path.read_text())
+    assert [t["name"] for t in live] == [t["name"] for t in committed["tools"]], (
+        f"manifest drift: {len(committed['tools'])} committed vs "
+        f"{len(live)} runtime")
+    for a, b in zip(live, committed["tools"]):
+        assert a["risk"] == b["risk"] and a["verification"] == b["verification"], \
+            f"{a['name']} drifted: manifest says {b}, runtime says {a}"
+        # The manifest must be internally consistent too. A hand-edited file
+        # that kept the right tiers but a wrong schema would still read as
+        # authoritative to an agent that fetched it.
+        assert gen_manifest.build([b])["tools"] == [b], (
+            f"{a['name']} is not what build() would emit — hand-edited?")
+    for t, d in zip(committed["tools"], derived):
+        assert t["annotations"] == d, (
+            f"{t['name']} annotations drifted: committed {t['annotations']}, "
+            f"runtime derives {d}")
+    print(f"  ✓ #89 manifest: {len(committed['tools'])} tools match the "
+          f"runtime table, tiers and annotations included")
+
+    # #90 — the suite must never collapse the three tiers into one number.
+    # 6 of the 25 tools are backed by a stub written for the test, and 1
+    # calls a real external service. A flat "25/25 verified" would be a false
+    # claim about the other 18, so the counts are asserted as a breakdown and
+    # the comparison is exact — a new tool that forgets to declare a tier
+    # fails here too.
+    assert counts == {"in-browser": 18, "external": 1, "stub": 6}, counts
+    assert sum(counts.values()) == 25, counts
+    # The breakdown must be derivable from the table, not hardcoded — if the
+    # two disagree, __elohimVerificationCounts is lying about the table.
+    from collections import Counter
+    assert dict(Counter(t["verification"] for t in live)) == counts, (
+        f"counts {counts} disagree with table {live}")
+    print(f"  ✓ #90 verification tiers reported separately: {counts}")
 
     return 0
 

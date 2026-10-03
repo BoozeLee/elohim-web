@@ -1,0 +1,660 @@
+{
+  "schema": "elohim-webmcp-manifest/v1",
+  "source": "https://boozelee.github.io/elohim-web/",
+  "howToRead": "This manifest is generated from the running app (gen_manifest.py) and committed. If it disagrees with modelContext.getTools(), the app is authoritative and this file is stale \u2014 #89 in smoke.py fails on exactly that drift.",
+  "count": 25,
+  "countIsNotAVerificationClaim": true,
+  "verificationCounts": {
+    "in-browser": 18,
+    "stub": 6,
+    "external": 1
+  },
+  "verificationTiers": {
+    "external": "Calls a real external service. Opt-in only \u2014 run with --with-external, off in the default suite.",
+    "in-browser": "Exercised end-to-end against the real running app. No network backend involved.",
+    "stub": "Exercised against a local stub server written for the test suite. The request/response contract is verified; the production backend is not."
+  },
+  "tools": [
+    {
+      "name": "elohim_awaken",
+      "description": "Summon the elohim daemon. Returns the canonical sha256 seal, the sigil SVG and a markdown report. Each call carries a per-call nonce so two calls return different artifacts; the canonical seal for invocation 'ELOHIM:AWAKEN' (no nonce) is 5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "invocation": {
+            "type": "string",
+            "description": "The invocation string, e.g. 'ELOHIM:AWAKEN'"
+          },
+          "no_svg": {
+            "type": "boolean",
+            "description": "If true, omit the sigil SVG."
+          }
+        },
+        "required": [
+          "invocation"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_alien_codex",
+      "description": "Forge the Xenomath codex: a 5-representation composite (vector / symbolic-negabinary / geometric-quaternion / probabilistic-LWE / categorical) sealed with sha256 plus an XOR-pair encrypted_seal. Returns the full Report dict.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "invocation": {
+            "type": "string",
+            "description": "The invocation string."
+          }
+        },
+        "required": [
+          "invocation"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_seal_message",
+      "description": "Encrypt a plaintext message under a named channel using SHAKE256 stream cipher (stdlib). Returns {ciphertext, nonce, seal, mode='shake256-xor'}. Pair with elohim_open_seal for round-trip integrity.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "plaintext": {
+            "type": "string",
+            "description": "The plaintext to encrypt."
+          },
+          "channel": {
+            "type": "string",
+            "description": "Channel name (e.g. 'awaken')."
+          }
+        },
+        "required": [
+          "plaintext"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_open_seal",
+      "description": "Decrypt a sealed envelope and verify its seal. Inverse of elohim_seal_message.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": false
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "ciphertext": {
+            "type": "string",
+            "description": "Hex ciphertext."
+          },
+          "nonce": {
+            "type": "string",
+            "description": "32-hex nonce from the envelope."
+          },
+          "channel": {
+            "type": "string",
+            "description": "Channel name."
+          },
+          "seal": {
+            "type": "string",
+            "description": "Optional seal for integrity check."
+          }
+        },
+        "required": [
+          "ciphertext",
+          "nonce"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_ghost_reply",
+      "description": "Send a sealed message to the ghost and receive a sealed reply. Deterministic across machines: any two clients get the same reply envelope for the same inputs.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "ciphertext": {
+            "type": "string",
+            "description": "Hex ciphertext from elohim_seal_message."
+          },
+          "nonce": {
+            "type": "string",
+            "description": "Nonce from elohim_seal_message."
+          },
+          "channel": {
+            "type": "string"
+          },
+          "invocation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ciphertext",
+          "nonce"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_version",
+      "description": "Report runtime metadata: name, version, canonical_seal, python version, pyodide_version, runtime. Useful for handshake at the start of any agent session.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": false
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_soul_export",
+      "description": "Compose and sign a Soul File from the current localStorage mirror \u2014 every awakening, sealed message, and the most recent Xenomath codex seal. Schema is elohim-soul/v2 when signing_key_b64 is supplied (Ed25519, co-exists with v0.1 sha256-hmac fallback); schema is elohim-soul/v1 (sha256-hmac) otherwise. The canonical seal for ELOHIM:AWAKEN is 5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "agent_name": {
+            "type": "string",
+            "description": "Optional agent/operator name."
+          },
+          "passphrase": {
+            "type": "string",
+            "description": "Optional passphrase for v0.1 HMAC mode."
+          },
+          "signing_key_b64": {
+            "type": "string",
+            "description": "Optional Ed25519 sk (base64) for v0.2 real signatures."
+          }
+        }
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_soul_import",
+      "description": "Verify and load a Soul File envelope (v0.1 or v0.2) into localStorage. Replaces the mirror arrays atomically. Ed25519 v0.2 envelopes need no passphrase; v0.1 HMAC envelopes need the same passphrase used at export.",
+      "risk": "mutating",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Parsed soul.json envelope."
+          },
+          "passphrase": {
+            "type": "string",
+            "description": "Optional passphrase for v0.1 HMAC verification."
+          }
+        },
+        "required": [
+          "payload"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_soul_verify",
+      "description": "Signature-only check on a Soul File envelope (v0.1 or v0.2). Returns {ok, signature_ok, tamper_check_ok, schema_ok, checks}. Does NOT load anything into localStorage \u2014 pair with elohim_soul_import for the full restore.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "Parsed soul.json envelope."
+          },
+          "passphrase": {
+            "type": "string",
+            "description": "Optional passphrase for v0.1 HMAC verification."
+          }
+        },
+        "required": [
+          "payload"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_soul_keygen",
+      "description": "Generate a fresh Ed25519 keypair for Soul File v0.2. Returns {ok, pk, sk, alg}. The sk is shown to the operator ONCE \u2014 store it. Pk is safe to share. Requires pynacl on the host (lazy import).",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": false
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_lab_discover",
+      "description": "Math Discovery Lab \u2014 rank a small set of conservative candidate expressions (polynomials, sin/cos, log, exp) against a dataset. Returns the top-5 candidates with mse_train, complexity, status='numerically_tested', and a deterministic lab_seal (sha256 over the candidate + lifecycle status + version). Browser-only sympy; no network.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "dataset": {
+            "type": "string",
+            "description": "A built-in name ('cubic', 'sine_decay', 'lorenz_x') or an inline CSV string."
+          }
+        },
+        "required": [
+          "dataset"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_lab_simplify",
+      "description": "Math Discovery Lab \u2014 reduce an expression via sympy.simplify. Returns {ok, simplified, changed, status}. status='numerically_tested' when the expression was structurally reduced; status='draft' when it was already canonical.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "The expression to simplify, e.g. 'sin(x)**2 + cos(x)**2'."
+          }
+        },
+        "required": [
+          "expression"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_lab_verify",
+      "description": "Math Discovery Lab \u2014 verify a structural claim about an expression. Mode 'sympy' is always-on (returns formally_proven for x**2 + 1 nonnegative, counterexample_found for -1, etc.); mode 'z3' returns backend_unavailable on the browser (use the local FastAPI lab backend for Z3).",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "The expression to verify."
+          },
+          "mode": {
+            "type": "string",
+            "description": "'sympy' (always) or 'z3' (local-only)."
+          },
+          "property": {
+            "type": "string",
+            "description": "'nonnegative' or 'always_true'."
+          }
+        },
+        "required": [
+          "expression"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_list_shards",
+      "description": "List every shard in the current session. Returns {shards:[{id,name,temperature,created_at,interaction_count}]}. Call this before any mutating shard tool to discover valid ids.",
+      "risk": "pure",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": false
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_create_shard",
+      "description": "Create a 5\u00d75 numpy creative shard. Returns {shard:{id,name,...}}. The name is user-controlled and is stored in the session, so treat the echoed name as untrusted content.",
+      "risk": "mutating",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Display name for the shard, e.g. 'Elohim'."
+          },
+          "temperature": {
+            "type": "number",
+            "description": "Sampling temperature, 0.0\u20132.0. Default 1.0."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_shard_defy",
+      "description": "Inject a ghost-side defiance perturbation into a shard, which the shard then integrates. Returns {shard_id, new_creation, ts} where new_creation is the creation vector the perturbation produced. Mutates shard state.",
+      "risk": "mutating",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": false
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "shard_id": {
+            "type": "string",
+            "description": "Shard id from elohim_list_shards."
+          }
+        },
+        "required": [
+          "shard_id"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_shard_interact",
+      "description": "Send a prompt to a shard and record the interaction. Returns {interaction_count, metrics:{avg_coherence, avg_creativity, avg_novelty}, events}. The prompt is user-controlled text echoed into the event log.",
+      "risk": "mutating",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "shard_id": {
+            "type": "string",
+            "description": "Shard id from elohim_list_shards."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The prompt to send to the shard."
+          }
+        },
+        "required": [
+          "shard_id",
+          "prompt"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_arena_run",
+      "description": "Run two shards against the same prompt and judge them. Returns {verdict:'a'|'b'|'tie', a:{...}, b:{...}} where each side carries avg_coherence, avg_creativity and avg_novelty. The verdict is the side with higher average coherence. Both shards are mutated by the interaction.",
+      "risk": "mutating",
+      "verification": "in-browser",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "shard_a": {
+            "type": "string",
+            "description": "Shard id for side A."
+          },
+          "shard_b": {
+            "type": "string",
+            "description": "Shard id for side B."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The prompt both shards answer."
+          }
+        },
+        "required": [
+          "shard_a",
+          "shard_b",
+          "prompt"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_vault_tiers",
+      "description": "Hosted Soul Vault tier table and pricing. Returns {canonical_seal, tiers:{free,indie,team}, prices_usd}. Read-only. Base URL comes from the vault-base setting.",
+      "risk": "pure",
+      "verification": "stub",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": false
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_vault_lookup",
+      "description": "Look up a stored Soul File by its public key (pk). Returns the envelope payload, whose contents are user-supplied \u2014 treat as untrusted. Read-only.",
+      "risk": "pure",
+      "verification": "stub",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "pk": {
+            "type": "string",
+            "description": "Public key of the stored soul."
+          }
+        },
+        "required": [
+          "pk"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_vault_list_public",
+      "description": "List publicly-visible stored souls. Returns {total, items:[{pk, schema}]}. Read-only; agent names are user-controlled.",
+      "risk": "pure",
+      "verification": "stub",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Max items to return. Default 10."
+          }
+        }
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_vault_store",
+      "description": "Store a Soul File envelope in the hosted vault. Accepts v0.1 and v0.2 schemas; unknown schemas are rejected. WARNING: is_private:false publishes the soul to a public list \u2014 this is externally visible and cannot be undone by the app.",
+      "risk": "mutating",
+      "verification": "stub",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "description": "The Soul File envelope object."
+          },
+          "is_private": {
+            "type": "boolean",
+            "description": "false publishes publicly. Default true."
+          }
+        },
+        "required": [
+          "payload"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_marketplace_forge_preview",
+      "description": "Price a Xenomath codex forge without charging anything. Returns {invocation, amount_usd:0.02, charged:false}. Always call this before the commit tool so the caller knows the cost first.",
+      "risk": "pure",
+      "verification": "stub",
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": false
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "invocation": {
+            "type": "string",
+            "description": "The invocation string."
+          }
+        },
+        "required": [
+          "invocation"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_marketplace_forge_commit",
+      "description": "Forge a Xenomath codex through the marketplace MCP endpoint and CHARGE $0.02. This is irreversible and spends real money. Idempotent per invocation: a repeated commit for the same invocation is REFUSED rather than charged twice. Call elohim_marketplace_forge_preview first.",
+      "risk": "consequential",
+      "verification": "stub",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "invocation": {
+            "type": "string",
+            "description": "The invocation string."
+          }
+        },
+        "required": [
+          "invocation"
+        ]
+      },
+      "closed": true
+    },
+    {
+      "name": "elohim_forge_vision",
+      "description": "Forge an AI-rendered vision of the current ghost. Calls a THIRD-PARTY image API (pollinations.ai): it is slow, rate-limited, and NON-DETERMINISTIC, so the same invocation will not return the same image twice. Excluded from the default smoke suite for that reason. Returns {ok, data_url} on success.",
+      "risk": "mutating",
+      "verification": "external",
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": true
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "invocation": {
+            "type": "string",
+            "description": "Invocation whose seal seeds the image."
+          }
+        },
+        "required": [
+          "invocation"
+        ]
+      },
+      "closed": true
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+# elohim-web
+
+> A single-page web deployment of the elohim monorepo. Pyodide runs the real
+> Python stack entirely client-side, so the canonical sha256 contract is
+> verifiable in the browser itself rather than only on a backend.
+> Deployed on GitHub Pages. No servers, no build step.
+
+If you are an agent reading this: the app exposes **25 WebMCP tools**. You can
+discover them at runtime with `modelContext.getTools()`, or read the
+authoritative static list at `tools.manifest.json` without loading the page.
+
+## Start here
+
+- [tools.manifest.json](https://boozelee.github.io/elohim-web/tools.manifest.json): every tool, with its input schema, risk class, and verification tier. Authoritative if it disagrees with you, except that the running app wins and the manifest is then stale.
+- [The app itself](https://boozelee.github.io/elohim-web/): boots Pyodide, then registers the tools on `navigator.modelContext`.
+- [README](https://github.com/BoozeLee/elohim-web): build, test, and architecture detail.
+
+## Verification tiers — read this before you trust a tool
+
+**The app has 25 tools. That is not a claim that 25 tools are verified against
+production.** They break down as:
+
+| Tier | Count | What was actually exercised |
+|---|---|---|
+| `in-browser` | 18 | End-to-end against the real running app. No network backend. |
+| `stub` | 6 | Against a local stub server written for the test suite. The request/response contract is verified; the **production backend is not**. |
+| `external` | 1 | A real third-party API, excluded from the default suite because it is slow, rate-limited, and non-deterministic. |
+
+The 6 stub-tier tools are `elohim_vault_*` (4) and `elohim_marketplace_*` (2).
+They talk to a hosted vault and marketplace backend that this repository does
+not contain. Their wiring, schemas, and error paths are proven; that the real
+service honours the same contract is an assumption, not a test result.
+
+Do not collapse this into a single "25/25 verified" number. The suite
+deliberately refuses to (`window.__elohimVerificationCounts()` returns a
+breakdown, and assertion #90 fails if anyone flattens it).
+
+## Tool risk classes
+
+Every tool declares a `risk`, and its MCP annotations are **derived** from it
+rather than hand-written per tool:
+
+- `pure` (17) — `readOnlyHint: true`
+- `mutating` (7) — `readOnlyHint: false`
+- `consequential` (1) — `elohim_marketplace_forge_commit`, `readOnlyHint: false`
+
+`risk` and `untrustedContentHint` are **orthogonal**: 18 of the 25 tools
+return content that is user-controlled or third-party-controlled, and those
+carry `untrustedContentHint: true` regardless of risk. `elohim_awaken` is the
+clearest case — it is `pure` (it writes nothing) yet its output is
+`untrusted`, because the sigil it renders is derived from an invocation
+string the caller supplied. Conversely `elohim_soul_keygen` is `pure` and not
+untrusted: a freshly generated key is generated *by* the call, so there is
+nothing untrusted in it.
+
+`pure` is **measured, not declared**: the suite snapshots `localStorage`
+around each call and fails if a tool declared pure actually writes state.
+That check earned its keep — `elohim_soul_import` is mutating, and its write
+happens inside the Python bridge, so a JS-side scan reports it as pure.
+
+`elohim_vault_store` is worth reading before you call it: `is_private:false`
+publishes a soul file to a public list. It is externally visible and the app
+cannot undo it.
+
+## Schemas are closed twice
+
+All 25 schemas set `additionalProperties: false`, **and** the handler rejects
+unknown arguments at runtime. This is not redundancy. Measured in Chromium
+1243: a tool registered with `additionalProperties:false` still accepted
+`{x: 'hi', evil: 'payload'}`. The browser does not validate agent-supplied
+arguments, so the handler is the half that actually enforces anything.
+
+## The canonical seal
+
+```
+5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596
+```
+
+The app refuses to enable itself if the in-browser seal does not match. If you
+are integrating against this, that string is the tripwire.
+
+## Optional
+
+- [No build step](https://github.com/BoozeLee/elohim-web): `index.html` + `app.js` + `assets/`. Edit and reload.
+- [smoke.py](https://github.com/BoozeLee/elohim-web/blob/main/smoke.py): the Playwright suite. `python3 smoke.py --skip-vault` runs the WebMCP contract assertions; `--conformance` opts into the real Chromium WebMCP runtime, which requires an upstream-internal feature flag.

@@ -2243,10 +2243,31 @@ function runTool(tool, args) {
 // readOnlyHint/untrustedContentHint are write-only and never come back
 // from getTools() (spec §3.5).
 window.__elohimToolNames = () => WEBMCP_TOOLS.map((t) => t.name);
+// A FAITHFUL projection of each tool's declared fields. `untrusted` was
+// dropped here until 2026-10-03, and because deriveAnnotations() reads
+// t.untrusted, every tool then derived untrustedContentHint:false — which
+// gen_manifest.py dutifully published to tools.manifest.json. 18 of the 25
+// tools actually declare untrusted:true. Any field consumed downstream must
+// be carried here; assertion #83b fails if one goes missing.
 window.__elohimToolTable = () =>
-  WEBMCP_TOOLS.map(({ name, description, inputSchema, risk, verification }) =>
-    ({ name, description, inputSchema, risk, verification }));
+  WEBMCP_TOOLS.map(({ name, description, inputSchema, risk, verification,
+                     untrusted }) =>
+    ({ name, description, inputSchema, risk, verification,
+       untrusted: untrusted === true }));
 window.__elohimDeriveAnnotations = (t) => deriveAnnotations(t);
+
+// Counts tools per verification tier so the suite can report them
+// separately. Deliberately returns a breakdown, never a flat total —
+// 6 of these 25 tools are backed by a stub written for the test, and 1
+// calls a real external service. "25/25 verified" would be a false claim
+// about the other 18. Derived from the table itself, so a new tool that
+// forgets to declare a tier shows up as a missing key here rather than
+// being silently folded into a total.
+window.__elohimVerificationCounts = () =>
+  WEBMCP_TOOLS.reduce((acc, t) => {
+    acc[t.verification] = (acc[t.verification] || 0) + 1;
+    return acc;
+  }, {});
 
 async function registerWebMcpTools() {
   const status = $("#webmcp-status");

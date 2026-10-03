@@ -428,6 +428,125 @@ inside that range. D-J21's +60 % tolerance was never needed.
 
 Reproduce with `boot_bench.py` (3 cold-cache samples, cache disabled).
 
+## WebMCP tool surface (Push 24)
+
+An agent that loads the page can discover **25 tools** through
+`modelContext.getTools()`. Before this push it discovered **0**, for two
+independent reasons that both failed silently:
+
+1. The app guarded registration on `window.modelContext`, which is
+   `undefined` in Chromium 1243. The live accessor is
+   **`navigator.modelContext`**; `document.modelContext` and
+   `window.modelContext` are both undefined. The resolver now tries all
+   three in order, so it survives the accessor moving.
+2. `ModelContextTool` requires a member named **`execute`**, not
+   `handler`. Registering with `handler` throws *Required member is
+   undefined* and registers nothing — so fixing only the accessor would
+   have traded a silent failure for a loud one, not produced working tools.
+
+Both were found by measuring, not by reading the docs. The
+`browserbase-add-webmcp` skill states the opposite of reality on the
+accessor question; following it literally would have shipped a broken
+"hardened" contract while reporting success.
+
+### Verification tiers — 25 tools is not 25/25 verified
+
+| Tier | Count | What was actually exercised |
+|---|---|---|
+| `in-browser` | 18 | End-to-end against the real running app. No network backend. |
+| `stub` | 6 | A local stub server (`stub_backends.py`) written for the suite. The request/response contract is proven; the **production vault and marketplace backends are not**. |
+| `external` | 1 | `elohim_forge_vision` → pollinations.ai. Real third party, slow, rate-limited, non-deterministic. Off by default. |
+
+`window.__elohimVerificationCounts()` returns this breakdown, and
+assertion **#90** fails if the exact counts ever change without intent or
+if anyone flattens them into a single total. The flat number is the
+misleading one: 6 tools have never touched a production backend.
+
+### Risk is measured, not declared
+
+Every tool declares a `risk` (`pure` / `mutating` / `consequential`) and
+its MCP annotations are **derived** from it. But declaration is only a
+hypothesis — assertion #85 snapshots `localStorage` around each
+`pure`-declared call and fails if one actually writes state. This caught a
+real gap: `elohim_soul_import` is mutating, and its write happens inside
+the Python bridge, so a JS-side scan reports all 13 original tools as pure.
+
+`risk` and `untrustedContentHint` are orthogonal: **18 of 25** tools return
+user- or third-party-controlled content and carry
+`untrustedContentHint: true` regardless of risk. `elohim_awaken` is
+`pure` yet `untrusted` — it writes nothing, but renders a sigil derived
+from an invocation string the caller supplied.
+
+Getting that number right required a fix. `__elohimToolTable()`
+destructured only `{name, description, inputSchema, risk, verification}`
+and silently dropped `untrusted`. Because `deriveAnnotations()` reads
+`t.untrusted`, all 25 tools then derived `untrustedContentHint: false` —
+and `gen_manifest.py`, reading the same table, published that wrong value
+to `tools.manifest.json` as a build artifact that looked authoritative.
+
+The instructive part is that **three existing guards all missed it**:
+
+- #83 tests `deriveAnnotations()` with synthetic objects, so it proved the
+  *function* correct while saying nothing about whether the real table
+  feeds it the field.
+- #89's annotation cross-check compares the committed manifest against
+  `window.__elohimDeriveAnnotations()`. Both read the same lossy table, so
+  the two agreed on a systematically wrong value.
+- `gen_manifest.build()` round-trip is self-consistent for the same reason.
+
+Assertion **#83b** now compares the table against the tools' own
+declarations and fails if any field consumed downstream goes missing.
+A cross-check between two views of the same defective source is not a
+cross-check.
+
+### Schemas are closed twice
+
+All 25 schemas set `additionalProperties: false`, **and** `runTool()`
+rejects unknown arguments in the handler. The redundancy is deliberate and
+measured: a tool registered with `additionalProperties:false` still
+*accepted* `{x:'hi', evil:'payload'}` in Chromium 1243. The browser does
+not validate agent-supplied arguments, so the handler is the half that
+actually enforces anything.
+
+### Two validation tiers
+
+- **Tier 1 (default).** A spec-shaped `ModelContext` fake is injected via
+  an init script. No Chromium feature flag, so the permanent gate cannot
+  break when an upstream-internal flag is renamed. The fake deliberately
+  throws Chromium's exact `Required member is undefined` error when
+  `execute` is missing, so it cannot rubber-stamp the original bug.
+- **Tier 2 (opt-in).** `python3 smoke.py --skip-vault --conformance` runs
+  the same assertions against genuine Chromium WebMCP. This requires
+  `--enable-features=WebMCPTesting`, an upstream-internal flag. If it is
+  renamed, the run **fails loudly** — it does not silently skip.
+
+### Running it
+
+```bash
+python3 smoke.py --skip-vault          # default: Tier 1, external tier skipped
+python3 smoke.py --skip-vault --conformance   # Tier 2, real Chromium WebMCP
+python3 smoke.py --skip-vault --with-external  # additionally call pollinations.ai
+python3 gen_manifest.py                # regenerate tools.manifest.json
+```
+
+`--with-external` is off by default on purpose: that tool is slow,
+rate-limited, and non-deterministic, so a flaky failure would be
+indistinguishable from a real contract regression.
+
+### The manifest is generated, and committed
+
+`tools.manifest.json` is produced by `gen_manifest.py` from the live
+`window.__elohimToolTable()` and committed so a tool change shows up as a
+reviewable diff rather than a silently regenerated blob. Assertion **#89**
+compares the committed file against the running table — names, risk,
+verification tier, and the runtime-derived annotations — so a hand-edited
+or stale manifest fails the suite. Annotations are read back from
+`window.__elohimDeriveAnnotations()` rather than recomputed in Python, so
+the check is a genuine JS↔file cross-check and not the generator agreeing
+with itself.
+
+`llms.txt` is the orientation file for an agent landing on the site cold.
+
 ## How to deploy
 
 Push to `main`. GitHub Pages serves the repo root as-is — no build step:
