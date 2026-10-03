@@ -750,6 +750,41 @@ def main() -> int:
         print(f"  vault bad-schema rejection: {bad_r['status']} · "
               f"{bad_r['error'][:50]}… ✓")
 
+        # ---- Marketplace (Phase 17): actor codex_seal matches local ----
+        # The actor must produce the same codex_seal as the local bridge
+        # for the same invocation. This is the determinism contract —
+        # the smoke harness runs the marketplace MCP server locally on
+        # 127.0.0.1:8792 (started by the smoke bootstrap script).
+        # We bypass window.elohim.alienCodex (which injects a fresh
+        # nonce for every UI forge) and call the bridge module directly
+        # so the local invocation has nonce=None — matching the actor.
+        marketplace_url = "http://127.0.0.1:8792"
+        local_codex_str = page.evaluate(
+            "window.__pyodide.runPythonAsync("
+            "\"import json; json.dumps(bridge.alien_codex('ELOHIM:APIFY'))\")"
+        )
+        local_codex = _json.loads(local_codex_str)
+        # The MCP server's tools/call endpoint returns {result: {content: [{text: json_string}]}}
+        actor_resp = page.evaluate(
+            f"fetch({_json.dumps(marketplace_url + '/mcp')}, "
+            f"  {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, "
+            f"    body: JSON.stringify({{"
+            f"      jsonrpc: '2.0', id: 1, method: 'tools/call',"
+            f"      params: {{ name: 'elohim_alien_codex',"
+            f"                 arguments: {{ invocation: 'ELOHIM:APIFY' }} }}"
+            f"    }}) }}).then(r => r.json())"
+        )
+        actor_text = actor_resp["result"]["content"][0]["text"]
+        actor_data = _json.loads(actor_text)
+        assert actor_data["codex_seal"] == local_codex["codex_seal"], (
+            f"actor codex_seal differs from local:\n"
+            f"  local : {local_codex['codex_seal'][:32]}…\n"
+            f"  actor : {actor_data['codex_seal'][:32]}…"
+        )
+        assert actor_data["billing_event"]["charged"] is True
+        assert actor_data["billing_event"]["amount_usd"] == 0.02
+        print(f"  marketplace codex_seal: actor == local ({actor_data['codex_seal'][:24]}…) ✓")
+
         browser.close()
     return 0
 

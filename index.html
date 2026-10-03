@@ -1296,6 +1296,29 @@
         <div class="meta">encrypted seal (XOR-pair with SHAKE256 stream)</div>
         <div class="seal-display" id="codex-encrypted">(not yet forged)</div>
       </div>
+
+      <div class="card stack" id="marketplace-card">
+        <h2>Marketplace · run on Apify</h2>
+        <p class="meta" style="margin:0 0 10px 0;">
+          Phase 17. Forward a codex forge to the Apify Actor
+          <code>elohim/alien-codex</code> instead of running locally. Same
+          determinism contract (identical <code>codex_seal</code>), but
+          monetised: \$0.02 per successful 5-check validation, no-charge-on-fail.
+          Default is local-first; flip the toggle to opt in.
+        </p>
+        <div class="row" style="gap:8px;">
+          <input id="marketplace-url" type="text" placeholder="actor / mcp endpoint" value="http://127.0.0.1:8792/mcp" style="flex:1;" />
+        </div>
+        <div class="row" style="gap:8px; margin-top:8px; align-items:center;">
+          <label class="meta" style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="marketplace-toggle" />
+            run on marketplace (vs local)
+          </label>
+          <span class="meta" id="marketplace-pricing">outcome-based · \$0.02 per call · no-charge-on-fail</span>
+        </div>
+        <button id="marketplace-run" style="margin-top:10px;">forge via marketplace</button>
+        <div id="marketplace-status" class="meta" style="margin-top:8px; min-height:1.4em;"></div>
+      </div>
     </div>
 
     <div class="card" style="margin-top:18px">
@@ -1736,6 +1759,11 @@ const elohim = {
     call("vision_for", {
       invocation, seal, palette,
     }),
+  // Phase 17 marketplace: thin wrapper around the local bridge.
+  // Determinism contract: same invocation → same codex_seal as the
+  // Apify Actor and MCP server (verified by the smoke harness).
+  alienCodex: (invocation) =>
+    call("alien_codex", { invocation, nonce: freshNonce("codex") }),
   // Soul File (Push 14 v0.1 + Push 15 v0.2) — portable, signed agent
   // identity. Mirrors live in localStorage under elohim.soul.*; export
   // reads them and signs an envelope (v0.1 sha256-hmac by default, v0.2
@@ -3298,6 +3326,45 @@ window.addEventListener("DOMContentLoaded", () => {
 let lastCodexResult = null;
 
 $("#codex-run").addEventListener("click", runCodex);
+
+// ---------- Marketplace handler (Phase 17) ----------
+//
+// Default is local-first: the bridge forges the codex in-process. When
+// the operator flips the toggle, the same call is forwarded to the
+// marketplace MCP endpoint (default http://127.0.0.1:8792/mcp). Both
+// paths return the same `codex_seal` per the determinism contract.
+
+async function runMarketplaceForge() {
+  const status = $("#marketplace-status");
+  const base = ($("#marketplace-url").value || "http://127.0.0.1:8792/mcp").trim();
+  const inv = ($("#codex-inv-input") && $("#codex-inv-input").value.trim()) || "ELOHIM:APIFY";
+  status.innerHTML = '<span class="meta">calling marketplace…</span>';
+  try {
+    const resp = await fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "elohim_alien_codex",
+                  arguments: { invocation: inv } },
+      }),
+    });
+    const json = await resp.json();
+    const data = JSON.parse(json.result.content[0].text);
+    const billed = data.billing_event && data.billing_event.charged;
+    status.innerHTML = `<span class="${billed ? "ok" : "error"}">` +
+      `${billed ? "✓ charged" : "✗ no charge (validation failed)"} · ` +
+      `$0.02 · codex_seal=${data.codex_seal.slice(0, 16)}…</span>`;
+    // Forward to the codex UI so the operator sees the same artefact.
+    if (window.lastCodexResult && data.codex_seal) {
+      $("#codex-seal").textContent = data.codex_seal;
+      $("#codex-encrypted").textContent = data.encrypted_seal;
+    }
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ ${e.message || e}</span>`;
+  }
+}
+$("#marketplace-run").addEventListener("click", runMarketplaceForge);
 
 $("#codex-copy-seal").addEventListener("click", async () => {
   if (!lastCodexResult?.codex_seal) return;
