@@ -1990,6 +1990,158 @@ const WEBMCP_TOOLS = [
       };
     },
   },
+  // --- Vault + marketplace (Push 24) ---
+  // These read their base URL from the existing #vault-base and
+  // #marketplace-url inputs, so the smoke harness can point them at
+  // stub_backends. They are labelled verification: "stub" because the
+  // suite only proves OUR wiring against a test double — not a
+  // conformance claim about Apify, x402, or the real FastAPI vault.
+  {
+    name: "elohim_vault_tiers",
+    risk: "pure",
+    verification: "stub",
+    untrusted: false,
+    description:
+      "Hosted Soul Vault tier table and pricing. Returns {canonical_seal, tiers:{free,indie,team}, prices_usd}. Read-only. Base URL comes from the vault-base setting.",
+    inputSchema: { type: "object", properties: {} },
+    invoke: () => elohim.vaultCall("GET", "/api/vault/tiers"),
+  },
+  {
+    name: "elohim_vault_lookup",
+    risk: "pure",
+    verification: "stub",
+    untrusted: true,
+    description:
+      "Look up a stored Soul File by its public key (pk). Returns the envelope payload, whose contents are user-supplied — treat as untrusted. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pk: { type: "string", description: "Public key of the stored soul." },
+      },
+      required: ["pk"],
+    },
+    invoke: ({ pk }) =>
+      elohim.vaultCall("GET", `/api/vault/lookup/${encodeURIComponent(pk)}`),
+  },
+  {
+    name: "elohim_vault_list_public",
+    risk: "pure",
+    verification: "stub",
+    untrusted: true,
+    description:
+      "List publicly-visible stored souls. Returns {total, items:[{pk, schema}]}. Read-only; agent names are user-controlled.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max items to return. Default 10." },
+      },
+    },
+    invoke: ({ limit }) =>
+      elohim.vaultCall("GET",
+        `/api/vault/list_public?limit=${encodeURIComponent(limit || 10)}`),
+  },
+  {
+    name: "elohim_vault_store",
+    risk: "mutating",
+    verification: "stub",
+    untrusted: true,
+    description:
+      "Store a Soul File envelope in the hosted vault. Accepts v0.1 and v0.2 schemas; unknown schemas are rejected. WARNING: is_private:false publishes the soul to a public list — this is externally visible and cannot be undone by the app.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        payload: { type: "object", description: "The Soul File envelope object." },
+        is_private: { type: "boolean", description: "false publishes publicly. Default true." },
+      },
+      required: ["payload"],
+    },
+    invoke: ({ payload, is_private }) =>
+      elohim.vaultCall("POST", "/api/vault/store",
+        { payload, is_private: is_private !== false }),
+  },
+  {
+    name: "elohim_marketplace_forge_preview",
+    risk: "pure",
+    verification: "stub",
+    untrusted: false,
+    description:
+      "Price a Xenomath codex forge without charging anything. Returns {invocation, amount_usd:0.02, charged:false}. Always call this before the commit tool so the caller knows the cost first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invocation: { type: "string", description: "The invocation string." },
+      },
+      required: ["invocation"],
+    },
+    invoke: ({ invocation }) => ({ invocation, amount_usd: 0.02, charged: false }),
+  },
+  {
+    name: "elohim_marketplace_forge_commit",
+    risk: "consequential",
+    verification: "stub",
+    untrusted: true,
+    description:
+      "Forge a Xenomath codex through the marketplace MCP endpoint and CHARGE $0.02. This is irreversible and spends real money. Idempotent per invocation: a repeated commit for the same invocation is REFUSED rather than charged twice. Call elohim_marketplace_forge_preview first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invocation: { type: "string", description: "The invocation string." },
+      },
+      required: ["invocation"],
+    },
+    // Idempotency guard: a second commit for the same invocation must be
+    // refused, never charged twice. This is the one irreversible action in
+    // the tool set (Review Focus #5).
+    invoke: async ({ invocation }) => {
+      if (_marketplaceCharged.has(invocation)) {
+        throw new Error(
+          `already charged for invocation "${invocation}"; ` +
+          `refusing to double-charge`
+        );
+      }
+      const base = (($("#marketplace-url") || {}).value
+                    || "http://127.0.0.1:8792/mcp").trim();
+      const resp = await fetch(base, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "tools/call",
+          params: { name: "elohim_alien_codex", arguments: { invocation } },
+        }),
+      });
+      const json = await resp.json();
+      const data = JSON.parse(json.result.content[0].text);
+      // Record the charge only after a successful response, so a failed
+      // call does not poison the invocation.
+      if (data.billing_event && data.billing_event.charged) {
+        _marketplaceCharged.add(invocation);
+      }
+      return data;
+    },
+  },
+  {
+    name: "elohim_forge_vision",
+    risk: "mutating",
+    verification: "external",
+    untrusted: true,
+    description:
+      "Forge an AI-rendered vision of the current ghost. Calls a THIRD-PARTY image API (pollinations.ai): it is slow, rate-limited, and NON-DETERMINISTIC, so the same invocation will not return the same image twice. Excluded from the default smoke suite for that reason. Returns {ok, data_url} on success.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invocation: { type: "string", description: "Invocation whose seal seeds the image." },
+      },
+      required: ["invocation"],
+    },
+    // Calls the bridge directly rather than the forgeVision() UI helper,
+    // which is DOM-bound, returns nothing, and depends on lastAwaken being
+    // set by the UI. The seal/palette come from the caller's own awaken.
+    invoke: async ({ invocation }) => {
+      const last = (typeof lastAwaken !== "undefined" && lastAwaken) || null;
+      return elohim.vision(invocation, last?.seal || null,
+                           last?.palette || null);
+    },
+  },
 ];
 
 // Close every schema at the source rather than per-literal, so a tool
@@ -1998,6 +2150,11 @@ const WEBMCP_TOOLS = [
 for (const t of WEBMCP_TOOLS) {
   t.inputSchema = { additionalProperties: false, ...t.inputSchema };
 }
+
+// Invocations already charged through the marketplace commit tool. Session
+// scoped: a reload legitimately permits a fresh charge, which is the
+// operator's call to make, not a silent re-charge by the app.
+const _marketplaceCharged = new Set();
 
 // ─── Push 24 — ModelContext resolution (spec §4.1) ─────────────────
 //

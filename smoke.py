@@ -2269,17 +2269,156 @@ def webmcp_contract_assertions() -> int:
         print(f"  ✓ #86 in-browser tier: create→defy→list→interact→arena "
               f"all succeeded (shard {sid[:8]}…, verdict {arena['data']['verdict']})")
 
-        # The inventory grows by exactly the five new tools.
-        names2 = page.evaluate(
-            "() => window.__elohimToolNames()")
-        assert len(names2) == 18, (
-            f"expected 18 tools after T5, got {len(names2)}: {names2}"
-        )
+        # #86b — the five T5 tools must be present. The absolute total
+        # keeps growing (25 after T7), so presence is the invariant and
+        # each task asserts its own count.
+        names2 = page.evaluate("() => window.__elohimToolNames()")
         for t in ("elohim_list_shards", "elohim_create_shard",
                   "elohim_shard_defy", "elohim_shard_interact",
                   "elohim_arena_run"):
             assert t in names2, f"{t} not registered"
-        print(f"  ✓ #86b inventory: {len(names2)} tools (13 + 5)")
+        print(f"  ✓ #86b inventory: all 5 shard/arena tools registered "
+              f"({len(names2)} total)")
+
+    # The stub-tier tools run against stub_backends, a local test double.
+    # This proves OUR wiring — request shape, response parsing, error paths.
+    # It is not a conformance claim about Apify, x402, or the real vault.
+    from stub_backends import start_stub_backends, CANONICAL_SEAL
+    stubs = start_stub_backends()
+    try:
+        with ModelContextProbe(url=url) as probe:
+            page = probe.page
+            page.goto(url)
+            page.wait_for_selector("#boot.hidden", state="attached", timeout=300000)
+            # Point the existing UI inputs at the stub, exactly as the smoke
+            # harness already does for the vault base.
+            page.evaluate(
+                "([vb, mu]) => {"
+                " document.getElementById('vault-base').value = vb;"
+                " document.getElementById('marketplace-url').value = mu;"
+                "}", [stubs.vault_base, stubs.marketplace_url])
+
+            def ct(name, args):
+                return page.evaluate("""async ({n, a}) => {
+                  const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+                    method:'tools/call', params:{name:n, arguments:a}});
+                  const res = r && r.result;
+                  if (!res) return {ok: false, err: 'no result'};
+                  if (res.isError) return {ok: false, err: res.content?.[0]?.text};
+                  try { return {ok: true,
+                                 data: JSON.parse(res.content[0].text)}; }
+                  catch (e) { return {ok: false, err: 'unparseable: ' + e.message}; }
+                }""", {"n": name, "a": args})
+
+            # #87 — vault round-trip against the stub.
+            tiers = ct("elohim_vault_tiers", {})
+            assert tiers["ok"], f"vault_tiers failed: {tiers['err']}"
+            assert "free" in tiers["data"]["tiers"], tiers["data"]
+
+            stored = ct("elohim_vault_store", {
+                "payload": {"schema": "elohim-soul/v2", "agent_name": "smoke"},
+                "is_private": False})
+            assert stored["ok"], f"vault_store failed: {stored['err']}"
+            assert stored["data"]["ok"] is True, stored["data"]
+
+            found = ct("elohim_vault_lookup", {"pk": "smoke"})
+            assert found["ok"], f"vault_lookup failed: {found['err']}"
+            assert found["data"]["payload"]["schema"] == "elohim-soul/v2", found
+
+            listed = ct("elohim_vault_list_public", {})
+            assert listed["ok"] and listed["data"]["total"] >= 1, listed
+
+            # The stub mirrors the real service's schema rejection, so the
+            # error path is exercised rather than skipped. The rejection
+            # arrives as a SUCCESSFUL call carrying a failure payload —
+            # vaultCall() surfaces the service's own {ok:false, error,
+            # status} — which is more useful to a caller than a generic
+            # tool-failed, so assert on the payload, not the transport.
+            bad = ct("elohim_vault_store", {
+                "payload": {"schema": "elohim-soul/v999"}, "is_private": False})
+            assert bad["ok"], f"call itself errored: {bad['err']}"
+            assert bad["data"].get("ok") is False, (
+                f"unknown schema was accepted: {bad['data']}")
+            assert bad["data"].get("status") == 400, bad["data"]
+            assert "unsupported schema" in str(bad["data"]["error"]).lower(), \
+                bad["data"]
+            print(f"  ✓ #87 vault tier: tiers/lookup/list/store round-trip + "
+                  f"unknown-schema rejection")
+
+            # #88 — preview never charges; commit does.
+            prev = ct("elohim_marketplace_forge_preview",
+                      {"invocation": "ELOHIM:APIFY"})
+            assert prev["ok"], f"preview failed: {prev['err']}"
+            assert prev["data"]["charged"] is False, (
+                f"preview must not charge: {prev['data']}")
+
+            c1 = ct("elohim_marketplace_forge_commit",
+                    {"invocation": "ELOHIM:PROBE-A"})
+            assert c1["ok"], f"commit failed: {c1['err']}"
+            assert c1["data"]["billing_event"]["charged"] is True, c1["data"]
+
+            # Review Focus #5 — a second commit must be refused, not
+            # double-charged. This is the one irreversible action in the
+            # tool set, so it is worth its own assertion.
+            c2 = ct("elohim_marketplace_forge_commit",
+                    {"invocation": "ELOHIM:PROBE-A"})
+            assert not c2["ok"], (
+                f"second commit was accepted — double charge: {c2['data']}")
+
+            # A different invocation is a different charge, and must work.
+            c3 = ct("elohim_marketplace_forge_commit",
+                    {"invocation": "ELOHIM:PROBE-B"})
+            assert c3["ok"], f"distinct commit was rejected: {c3['err']}"
+            print(f"  ✓ #88 marketplace: preview charges nothing, commit "
+                  f"charges once, repeat refused, distinct invocation OK")
+
+            names3 = page.evaluate("() => window.__elohimToolNames()")
+            assert len(names3) == 25, (
+                f"expected 25 tools after T7, got {len(names3)}: {names3}")
+            table3 = page.evaluate("() => window.__elohimToolTable()")
+            tiers_seen = {}
+            for t in table3:
+                tiers_seen[t["verification"]] = tiers_seen.get(
+                    t["verification"], 0) + 1
+            assert tiers_seen == {"in-browser": 18, "stub": 6, "external": 1}, \
+                tiers_seen
+            print(f"  ✓ #88b inventory: {len(names3)} tools, tiers "
+                  f"{tiers_seen}")
+
+        # Review Focus #4 — backend down must fail cleanly.
+        stubs.close()
+        with ModelContextProbe(url=url) as probe:
+            page = probe.page
+            page.goto(url)
+            page.wait_for_selector("#boot.hidden", state="attached", timeout=300000)
+            page.evaluate("(vb) => { document.getElementById('vault-base')"
+                          ".value = vb; }", stubs.vault_base)
+            down = page.evaluate("""async () => {
+              const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+                method:'tools/call',
+                params:{name:'elohim_vault_tiers', arguments:{}}});
+              const res = r && r.result;
+              let payload = null;
+              try { payload = JSON.parse(res.content[0].text); } catch (e) {}
+              return {isError: res && res.isError, payload};
+            }""")
+            # vaultCall() catches the fetch failure and returns a structured
+            # {ok:false, error} rather than throwing, so the rejection is a
+            # successful call carrying a failure payload. Assert on the
+            # payload — and crucially on ok:false, not merely on a message
+            # containing "error", which a success payload could also do.
+            assert down["isError"] is False or down["payload"] is None, (
+                f"unexpected transport error: {down}")
+            assert down["payload"] is not None, (
+                f"backend-down call returned no parseable payload: {down}")
+            assert down["payload"].get("ok") is False, (
+                f"backend-down call reported success: {down['payload']}")
+            assert "failed to fetch" in str(
+                down["payload"].get("error", "")).lower(), down["payload"]
+            print(f"  ✓ #RF4 backend down: structured ok:false, no hang, "
+                  f"no half-applied state")
+    finally:
+        stubs.close()
 
     return 0
 
