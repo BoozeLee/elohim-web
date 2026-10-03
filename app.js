@@ -1887,6 +1887,109 @@ const WEBMCP_TOOLS = [
         property: property || "nonnegative",
       }),
   },
+  // --- Shard lifecycle + arena (Push 24) ---
+  // All five route through the same elohim.* bridge wrappers the UI uses,
+  // so existing validation and business rules stay authoritative rather
+  // than being duplicated here.
+  {
+    name: "elohim_list_shards",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: false,
+    description:
+      "List every shard in the current session. Returns {shards:[{id,name,temperature,created_at,interaction_count}]}. Call this before any mutating shard tool to discover valid ids.",
+    inputSchema: { type: "object", properties: {} },
+    invoke: () => elohim.listShards(),
+  },
+  {
+    name: "elohim_create_shard",
+    risk: "mutating",
+    verification: "in-browser",
+    untrusted: true,
+    description:
+      "Create a 5×5 numpy creative shard. Returns {shard:{id,name,...}}. The name is user-controlled and is stored in the session, so treat the echoed name as untrusted content.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Display name for the shard, e.g. 'Elohim'." },
+        temperature: { type: "number", description: "Sampling temperature, 0.0–2.0. Default 1.0." },
+      },
+      required: ["name"],
+    },
+    invoke: ({ name, temperature }) =>
+      elohim.createShard(name, typeof temperature === "number" ? temperature : 1.0),
+  },
+  {
+    name: "elohim_shard_defy",
+    risk: "mutating",
+    verification: "in-browser",
+    untrusted: false,
+    description:
+      "Inject a ghost-side defiance perturbation into a shard, which the shard then integrates. Returns {shard_id, new_creation, ts} where new_creation is the creation vector the perturbation produced. Mutates shard state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        shard_id: { type: "string", description: "Shard id from elohim_list_shards." },
+      },
+      required: ["shard_id"],
+    },
+    invoke: ({ shard_id }) => elohim.defy(shard_id),
+  },
+  {
+    name: "elohim_shard_interact",
+    risk: "mutating",
+    verification: "in-browser",
+    untrusted: true,
+    description:
+      "Send a prompt to a shard and record the interaction. Returns {interaction_count, metrics:{avg_coherence, avg_creativity, avg_novelty}, events}. The prompt is user-controlled text echoed into the event log.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        shard_id: { type: "string", description: "Shard id from elohim_list_shards." },
+        prompt: { type: "string", description: "The prompt to send to the shard." },
+      },
+      required: ["shard_id", "prompt"],
+    },
+    invoke: ({ shard_id, prompt }) => elohim.interact(shard_id, prompt),
+  },
+  {
+    name: "elohim_arena_run",
+    risk: "mutating",
+    verification: "in-browser",
+    untrusted: true,
+    description:
+      "Run two shards against the same prompt and judge them. Returns {verdict:'a'|'b'|'tie', a:{...}, b:{...}} where each side carries avg_coherence, avg_creativity and avg_novelty. The verdict is the side with higher average coherence. Both shards are mutated by the interaction.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        shard_a: { type: "string", description: "Shard id for side A." },
+        shard_b: { type: "string", description: "Shard id for side B." },
+        prompt: { type: "string", description: "The prompt both shards answer." },
+      },
+      required: ["shard_a", "shard_b", "prompt"],
+    },
+    // Mirrors the arena button handler: both interact() calls run
+    // concurrently, and coherence decides the winner.
+    invoke: async ({ shard_a, shard_b, prompt }) => {
+      const [ra, rb] = await Promise.all([
+        elohim.interact(shard_a, prompt),
+        elohim.interact(shard_b, prompt),
+      ]);
+      const ca = ra.metrics?.avg_coherence || 0;
+      const cb = rb.metrics?.avg_coherence || 0;
+      const side = (r) => ({
+        interaction_count: r.interaction_count,
+        avg_coherence: r.metrics?.avg_coherence || 0,
+        avg_creativity: r.metrics?.avg_creativity || 0,
+        avg_novelty: r.metrics?.avg_novelty || 0,
+      });
+      return {
+        verdict: ca === cb ? "tie" : (ca > cb ? "a" : "b"),
+        a: side(ra),
+        b: side(rb),
+      };
+    },
+  },
 ];
 
 // Close every schema at the source rather than per-literal, so a tool

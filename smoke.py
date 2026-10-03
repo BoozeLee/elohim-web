@@ -2083,11 +2083,21 @@ def webmcp_contract_assertions() -> int:
     print(f"  ✓ #80b accessor fallback: document ✓ window ✓ "
           f"(all three candidates exercised)")
 
-    # #81 — the exact tool inventory, pinned by the spec.
-    assert len(expected) == 13, (
-        f"expected 13 existing tools, got {len(expected)}: {expected}"
-    )
-    print(f"  ✓ #81 inventory: {len(expected)} tools discovered")
+    # #81 — the 13 original tools must all survive. The absolute total
+    # grows with each task (18 after T5, 25 after T7) and is asserted by
+    # the task that adds the tools; what must never break is that none of
+    # the original 13 disappear.
+    ORIGINAL_13 = {
+        "elohim_awaken", "elohim_alien_codex", "elohim_seal_message",
+        "elohim_open_seal", "elohim_ghost_reply", "elohim_version",
+        "elohim_soul_export", "elohim_soul_import", "elohim_soul_verify",
+        "elohim_soul_keygen", "elohim_lab_discover", "elohim_lab_simplify",
+        "elohim_lab_verify",
+    }
+    missing = ORIGINAL_13 - set(expected)
+    assert not missing, f"original tools disappeared: {sorted(missing)}"
+    print(f"  ✓ #81 inventory: all 13 original tools present "
+          f"({len(expected)} registered)")
 
     with ModelContextProbe(url=url) as probe:
         page = probe.page
@@ -2214,6 +2224,62 @@ def webmcp_contract_assertions() -> int:
         )
         print(f"  ✓ #84 closed schemas: {len(table)} closed at discovery + "
               f"unknown field rejected by the handler")
+
+        # #86 — the in-browser tool tier, driven end-to-end the way an agent
+        # would: list → create → defy → interact → arena. Disposable state;
+        # every step routes through the same bridge the UI uses.
+        def call_tool(name, args):
+            return page.evaluate("""async ({n, a}) => {
+              const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+                method:'tools/call', params:{name:n, arguments:a}});
+              const res = r && r.result;
+              if (!res) return {ok: false, err: 'no result'};
+              if (res.isError) return {ok: false, err: res.content?.[0]?.text};
+              try { return {ok: true,
+                             data: JSON.parse(res.content[0].text)}; }
+              catch (e) { return {ok: false, err: 'unparseable: ' + e.message}; }
+            }""", {"n": name, "a": args})
+
+        created = call_tool("elohim_create_shard",
+                            {"name": "probe-shard", "temperature": 1.0})
+        assert created["ok"], f"create_shard failed: {created['err']}"
+        sid = created["data"]["shard"]["id"]
+
+        defied = call_tool("elohim_shard_defy", {"shard_id": sid})
+        assert defied["ok"], f"shard_defy failed: {defied['err']}"
+        # defy returns {shard_id, new_creation, ts} — measured, not assumed.
+        assert defied["data"]["shard_id"] == sid, defied["data"]
+        assert defied["data"].get("new_creation") is not None, defied["data"]
+
+        seen = call_tool("elohim_list_shards", {})
+        assert seen["ok"], f"list_shards failed: {seen['err']}"
+        ids = [s["id"] for s in seen["data"]["shards"]]
+        assert sid in ids, f"created shard {sid} not in list: {ids}"
+
+        acted = call_tool("elohim_shard_interact",
+                          {"shard_id": sid, "prompt": "paint an art of light"})
+        assert acted["ok"], f"shard_interact failed: {acted['err']}"
+        assert acted["data"]["interaction_count"] >= 1, acted["data"]
+        assert "avg_coherence" in acted["data"]["metrics"], acted["data"]
+
+        arena = call_tool("elohim_arena_run", {"shard_a": sid, "shard_b": sid,
+                                              "prompt": "paint light"})
+        assert arena["ok"], f"arena_run failed: {arena['err']}"
+        assert arena["data"]["verdict"] in {"a", "b", "tie"}, arena["data"]
+        print(f"  ✓ #86 in-browser tier: create→defy→list→interact→arena "
+              f"all succeeded (shard {sid[:8]}…, verdict {arena['data']['verdict']})")
+
+        # The inventory grows by exactly the five new tools.
+        names2 = page.evaluate(
+            "() => window.__elohimToolNames()")
+        assert len(names2) == 18, (
+            f"expected 18 tools after T5, got {len(names2)}: {names2}"
+        )
+        for t in ("elohim_list_shards", "elohim_create_shard",
+                  "elohim_shard_defy", "elohim_shard_interact",
+                  "elohim_arena_run"):
+            assert t in names2, f"{t} not registered"
+        print(f"  ✓ #86b inventory: {len(names2)} tools (13 + 5)")
 
     return 0
 
