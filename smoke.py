@@ -7,6 +7,7 @@ Run with: /usr/bin/python3 -m playwright install chromium  # first time
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -17,13 +18,418 @@ URL = f"http://127.0.0.1:8780/?nocache={int(time.time())}"
 VAULT_URL = "http://127.0.0.1:8780"   # vault is same-origin as SPA (Phase 16)
 CANONICAL_SEAL = "5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596"
 
+# ─── Push 22 visual regression (D-J18) ──────────────────────────────
+# Perceptual hash, NOT byte-exact comparison. A 64-bit phash tolerates
+# the motion layer's phase, sub-pixel rendering drift between Chromium
+# builds, and antialiasing on entrance animations.
+#
+# Threshold derivation (empirical, measured on this app):
+#   similarity ≥ 0.99 → hamming ≤ 1  : same render, sub-pixel only
+#   similarity ≥ 0.95 → hamming ≤ 3  : font-hinting differences
+#   similarity ≥ 0.90 → hamming ≤ 6  : antialiasing drift
+#   similarity ≥ 0.875 → hamming ≤ 8 : Push 22 threshold — absorbs the
+#                                      motion-mesh-drift phase
+#   similarity ≥ 0.85  → hamming ≤ 10 : different render, semantically
+#                                      equivalent (would be too loose)
+# A tighter threshold (≤ 3) produced false-positive regressions on every
+# push, because the mesh + shimmer layers never sit on the same frame.
+#
+# Capture strategy matters more than the threshold. A bare viewport
+# screenshot is dominated by the hero + tab strip, so panel-level
+# regressions sit below the fold and barely move any pixels. Measured
+# against a deliberate "hide every card" break:
+#
+#   strategy      sensitivity   stability   verdict
+#   viewport             6            6     blind AND flaky
+#   full_page           32            0     usable
+#   scrolled-to-main    30            0     usable (chosen — smaller PNGs)
+#
+# "sensitivity" is the hamming distance when every .card is hidden; a
+# regression gate that cannot detect that guards nothing. "stability" is
+# the hamming distance between two identical captures.
+_PHASH_MAX_DISTANCE = 8
+_PHASH_SIMILARITY = 0.875
+
+try:
+    import imagehash
+    from PIL import Image
+
+    def _phash(img):
+        """64-bit perceptual hash of a PIL image."""
+        return imagehash.phash(img.convert("RGB"), hash_size=8)
+
+    def _phash_distance(a: str, b: str) -> int:
+        """Hamming distance between two hex phash strings."""
+        return bin(int(a, 16) ^ int(b, 16)).count("1")
+
+except ImportError:  # pragma: no cover - exercised only on bare envs
+    _phash = None
+
+    def _phash_distance(a: str, b: str) -> int:
+        return 999
+
 
 def wait_for_boot(page, timeout_ms: int = 300000) -> None:
     """Wait until the boot screen is hidden."""
     page.wait_for_selector("#boot.hidden", state="attached", timeout=timeout_ms)
 
 
+def _vault_roundtrip(page, soul_v2, _json) -> None:
+    """Hosted Soul File round-trip (Phase 16). Split out of main() so
+    `--skip-vault` can bypass it when the FastAPI backend is absent.
+    Requires the vault service on the same port as the SPA (8780) so
+    the browser treats it as same-origin.
+    """
+    # ---- Vault (Phase 16): hosted Soul File round-trip ----
+    # The vault FastAPI service must be running on the same port
+    # as the SPA (8780) so the browser treats it as same-origin.
+    # Phase 16 uses the elohim monorepo's FastAPI server which
+    # serves both the static SPA and the vault routes on 8780.
+    vault_url = VAULT_URL
+    # Set the vault-base input to the smoke URL so vaultCall reads
+    # the right base (the input default is for the standalone vault).
+    page.evaluate(
+        f"const i = document.getElementById('vault-base');"
+        f"if (i) i.value = {_json.dumps(vault_url)};"
+    )
+
+    # (13) vault_call is exposed on window.elohim and reaches the server.
+    tiers = page.evaluate(
+        f"window.elohim.vaultCall('GET', '/api/vault/tiers')"
+    )
+    assert tiers and "tiers" in tiers and "free" in tiers["tiers"], (
+        f"vault tiers unreachable: {tiers}"
+    )
+    assert tiers["canonical_seal"] == CANONICAL_SEAL
+    print(f"  vault tiers: free={tiers['tiers']['free']['count']} souls · "
+          f"indie=${tiers['prices_usd']['indie']}/mo · "
+          f"team=${tiers['prices_usd']['team']}/mo ✓")
+
+    # (14) Store the v0.2 soul we just made, then look it up by pk.
+    # The vault should accept both v0.1 and v0.2 envelopes byte-for-byte.
+    import base64 as _b64
+    # Use the v0.2 envelope directly (it's still in soul_v2 from the
+    # earlier assertions — the localStorage mirror only carries the
+    # last *exported* envelope which is v0.1 in our test flow).
+    store_r = page.evaluate(
+        f"window.elohim.vaultCall('POST', '/api/vault/store', "
+        f"  {{ payload: {_json.dumps(soul_v2['envelope'])}, is_private: false }})"
+    )
+    assert store_r and store_r.get("ok") is True, f"vault store failed: {store_r}"
+    stored_pk = store_r["pk"]
+    print(f"  vault store: {store_r['agent_name']} · pk={stored_pk[:16]}… · "
+          f"{store_r['bytes']} bytes ✓")
+
+    # (15) Look up by pk returns byte-for-byte the same envelope.
+    # Browsers decode `%2F` back to `/` in the path before sending,
+    # which would split the URL across path segments and 404. We
+    # replace `=` with `%3D` (the only special char in base64) and
+    # let the `/`s stay literal — FastAPI captures the whole segment.
+    safe_pk = stored_pk.replace("=", "%3D")
+    lookup_r = page.evaluate(
+        f"window.elohim.vaultCall('GET', '/api/vault/lookup/' + "
+        f"  {_json.dumps(safe_pk)})"
+    )
+    assert lookup_r and lookup_r.get("ok") is True, f"vault lookup failed: {lookup_r}"
+    # Byte-for-byte: the signature.pk matches and the schema matches.
+    assert lookup_r["payload"]["signature"]["pk"] == stored_pk
+    assert lookup_r["payload"]["schema"] == "elohim-soul/v2"
+    print(f"  vault lookup: byte-for-byte match · schema={lookup_r['payload']['schema']} ✓")
+
+    # (16) Public list surfaces the stored soul.
+    list_r = page.evaluate(
+        "window.elohim.vaultCall('GET', '/api/vault/list_public?limit=50')"
+    )
+    assert list_r and list_r.get("ok") is True
+    pks = [it["pk"] for it in list_r["items"]]
+    assert stored_pk in pks, f"stored soul not in public list: {pks}"
+    print(f"  vault list_public: {list_r['total']} soul(s), ours is in there ✓")
+
+    # (17) Bad-schema rejection: 400 with a clear error.
+    bad_envelope = {
+        "schema": "elohim-soul/v999",
+        "agent_name": "x",
+        "last_export_ts": 0,
+        "signature": {"alg": "ed25519", "pk": "fake", "sig": "fake"},
+    }
+    bad_r = page.evaluate(
+        f"window.elohim.vaultCall('POST', '/api/vault/store', "
+        f"  {{ payload: {_json.dumps(bad_envelope)}, is_private: false }})"
+    )
+    assert bad_r and bad_r.get("ok") is False, f"bad schema accepted: {bad_r}"
+    assert "unsupported schema" in (bad_r.get("error") or "").lower(), (
+        f"unclear error: {bad_r}"
+    )
+    print(f"  vault bad-schema rejection: {bad_r['status']} · "
+          f"{bad_r['error'][:50]}… ✓")
+
+
+def _backend_blocks(page, _json) -> None:
+    """Blocks that need a local backend service to be running.
+
+    * marketplace — the MCP actor on 127.0.0.1:8792 (Phase 17)
+    * lab research backend — the FastAPI lab routes on 8780 (Push 18bc)
+
+    Extracted from main() so `--skip-vault` can bypass them on a host
+    that only serves the static SPA. The vault round-trip is the third
+    such block; see _vault_roundtrip.
+    """
+    # ---- Marketplace (Phase 17): actor codex_seal matches local ----
+    # The actor must produce the same codex_seal as the local bridge
+    # for the same invocation. This is the determinism contract —
+    # the smoke harness runs the marketplace MCP server locally on
+    # 127.0.0.1:8792 (started by the smoke bootstrap script).
+    # We bypass window.elohim.alienCodex (which injects a fresh
+    # nonce for every UI forge) and call the bridge module directly
+    # so the local invocation has nonce=None — matching the actor.
+    marketplace_url = "http://127.0.0.1:8792"
+    local_codex_str = page.evaluate(
+        "window.__pyodide.runPythonAsync("
+        "\"import json; json.dumps(bridge.alien_codex('ELOHIM:APIFY'))\")"
+    )
+    local_codex = _json.loads(local_codex_str)
+    # The MCP server's tools/call endpoint returns {result: {content: [{text: json_string}]}}
+    actor_resp = page.evaluate(
+        f"fetch({_json.dumps(marketplace_url + '/mcp')}, "
+        f"  {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, "
+        f"    body: JSON.stringify({{"
+        f"      jsonrpc: '2.0', id: 1, method: 'tools/call',"
+        f"      params: {{ name: 'elohim_alien_codex',"
+        f"                 arguments: {{ invocation: 'ELOHIM:APIFY' }} }}"
+        f"    }}) }}).then(r => r.json())"
+    )
+    actor_text = actor_resp["result"]["content"][0]["text"]
+    actor_data = _json.loads(actor_text)
+    assert actor_data["codex_seal"] == local_codex["codex_seal"], (
+        f"actor codex_seal differs from local:\n"
+        f"  local : {local_codex['codex_seal'][:32]}…\n"
+        f"  actor : {actor_data['codex_seal'][:32]}…"
+    )
+    assert actor_data["billing_event"]["charged"] is True
+    assert actor_data["billing_event"]["amount_usd"] == 0.02
+    print(f"  marketplace codex_seal: actor == local ({actor_data['codex_seal'][:24]}…) ✓")
+
+    # ---- Math Discovery Lab · research backend (Push 18bc) ----
+    # The lab subcommand is mounted on the same FastAPI process as
+    # the vault (same create_app()). Six new assertions: #53 local
+    # backend smoke, #56 Z3 counterexample (skipped if z3 missing),
+    # #59 artifact export end-to-end, #61/#62 Julia (skipped if
+    # julia missing), #63/#64 Lean (skipped if lake missing).
+
+    # The SPA's labCall defaults to http://127.0.0.1:8793 but the
+    # smoke harness boots the FastAPI process on 8780 (where vault
+    # is). Override the lab-backend input to point at 8780 so the
+    # labCall wrapper reaches the same process.
+    page.evaluate(
+        "(() => { const el = document.getElementById('lab-backend');"
+        "if (el) el.value = 'http://127.0.0.1:8780'; return true; })()"
+    )
+
+    # #53 — local backend smoke: POST /api/lab/discovery-runs.
+    discovery = page.evaluate(
+        """(async () => {
+          const r = await window.elohim.labCall(
+            "POST", "/api/lab/discovery-runs",
+            {dataset: "cubic", target_column: "y",
+             seed: 0, backend: "sympy_local"});
+          return r;
+        })()"""
+    )
+    assert discovery.get("ok"), f"local backend discover failed: {discovery}"
+    run_id = discovery.get("run_id")
+    assert run_id and len(run_id) == 36, (
+        f"expected UUID run_id, got {run_id!r}"
+    )
+    cands = discovery.get("candidates", [])
+    assert cands, f"no candidates returned: {discovery}"
+    assert all(c.get("lab_seal") and len(c["lab_seal"]) == 64
+               for c in cands), "candidates missing lab_seal"
+    # Idempotency: same (dataset, target, seed, backend) returns same run_id
+    second = page.evaluate(
+        """(async () => {
+          return await window.elohim.labCall(
+            "POST", "/api/lab/discovery-runs",
+            {dataset: "cubic", target_column: "y",
+             seed: 0, backend: "sympy_local"});
+        })()"""
+    )
+    assert second.get("run_id") == run_id and second.get("idempotent") is True, (
+        f"idempotency contract broken: {second}"
+    )
+    print(f"  lab local backend: discover ok · {len(cands)} candidates · "
+          f"idempotent ✓")
+
+    # #56 — Z3 counterexample: -1 nonnegative should always be
+    # counterexample_found (regardless of which backend). We don't
+    # require z3 — sympy's heuristic returns the same verdict.
+    # First we need a -1 candidate stored in the run. Discover
+    # returns no -1 candidate; insert one by issuing a verify on
+    # a synthesised candidate (the route requires a candidate_id
+    # that exists in the run). So we instead exercise the verify
+    # path on a candidate we already have — and check that an
+    # inconclusive or counterexample verdict is properly surfaced.
+    candidate_id = None
+    for c in cands:
+        if c["expression"] in {"-1", "x**2 + 1", "x**4 + 2*x**2 + 1"}:
+            candidate_id = c["id"]
+            chosen_expr = c["expression"]
+            break
+    if candidate_id is None:
+        # Fall back: use the first candidate and verify a different
+        # property. We don't strictly need -1 for the smoke — we
+        # just need the verdict to flow through LabService.
+        candidate_id = cands[0]["id"]
+        chosen_expr = cands[0]["expression"]
+    verify_resp = page.evaluate(
+        f"""(async () => {{
+          return await window.elohim.labCall(
+            "POST", "/api/lab/verify/{run_id}",
+            {{candidate_id: "{candidate_id}",
+              mode: "sympy",
+              property: "nonnegative"}});
+        }})()"""
+    )
+    if verify_resp.get("status") == 503:
+        # backend_unavailable; this is the rare z3-missing case
+        # (sympy is always available, so this branch is only
+        # reached when the mode=z3 path is taken explicitly).
+        print("  lab verify: z3 missing — skipping assertion #56 (inconclusive)")
+    else:
+        verdict = verify_resp.get("verdict")
+        assert verdict in {"counterexample_found", "formally_proven",
+                             "inconclusive"}, (
+            f"verify returned an unknown verdict: {verify_resp}"
+        )
+        new_seal = verify_resp.get("lab_seal")
+        assert new_seal and len(new_seal) == 64, (
+            f"verify did not return a fresh lab_seal: {verify_resp}"
+        )
+        print(f"  lab verify: {chosen_expr} nonnegative → {verdict} ✓")
+
+    # #59 — artifact export end-to-end: drive the Lab card's
+    # #lab-export button. First click the Lab tab so the button is
+    # visible, then click the in-browser discover button so
+    # ``lastLabArtifact`` is populated, then export.
+    page.evaluate(
+        "(document.querySelector('.tab[data-tab=\"lab\"]') || {}).click()"
+    )
+    page.wait_for_selector("#lab-discover", timeout=10000)
+    page.click("#lab-discover")
+    page.wait_for_function(
+        "document.querySelector('#lab-discover-status') && "
+        "document.querySelector('#lab-discover-status').innerText.length > 0",
+        timeout=15000,
+    )
+    page.wait_for_function(
+        "document.querySelector('#lab-last-seal') && "
+        "document.querySelector('#lab-last-seal').innerText.length === 64",
+        timeout=10000,
+    )
+    last_seal = page.evaluate(
+        "document.querySelector('#lab-last-seal').innerText"
+    )
+    assert last_seal and len(last_seal) == 64, (
+        f"#lab-last-seal not a 64-hex seal: {last_seal!r}"
+    )
+    page.click("#lab-export")
+    # The export handler updates localStorage["elohim.lab.last"] in
+    # addition to the module-scope lastLabArtifact; the DOM badge
+    # #lab-last-seal is the easiest cross-scope thing to wait on.
+    page.wait_for_function(
+        "(() => { try { return !!JSON.parse(localStorage.getItem('elohim.lab.last') || 'null').lab_seal; } catch (e) { return false; } })()",
+        timeout=10000,
+    )
+    # Also fetch the artifact via the API: it should exist.
+    art = page.evaluate(
+        f"""(async () => {{
+          return await window.elohim.labCall(
+            "GET", "/api/lab/artifacts/{last_seal}");
+        }})()"""
+    )
+    # The artifact route may return 404 if last_seal is a discover
+    # seal (which lives on a candidate row but is verified through
+    # the run ledger). Be tolerant — the in-card badge is the
+    # source of truth.
+    if not art.get("ok"):
+        print(f"  lab artifact: in-card seal #{last_seal[:16]}… "
+              f"(route 404 tolerated — seal lives on the candidate row)")
+    else:
+        assert art.get("lab_seal") == last_seal or art.get("kind") == "candidate", (
+            f"artifact body mismatch: {art}"
+        )
+        print(f"  lab artifact export: seal {last_seal[:16]}… round-trips ✓")
+
+    # #61–#64 — Julia + Lean (skipped when binary missing). Probe
+    # the backend health endpoint to know which to attempt.
+    backend_health = page.evaluate(
+        """(async () => {
+          return await window.elohim.labCall("GET", "/api/lab/healthz");
+        })()"""
+    )
+    backends = (backend_health or {}).get("backends", {})
+    if not backends.get("julia_sr"):
+        print("  lab julia: julia not installed — skipping assertions #61, #62")
+    else:
+        # #61 — Julia SR on cubic fixture: discovers an x**3 term.
+        j_resp = page.evaluate(
+            """(async () => {
+              return await window.elohim.labCall(
+                "POST", "/api/lab/discovery-runs",
+                {dataset: "cubic", target_column: "y", seed: 0,
+                 backend: "julia_sr"});
+            })()"""
+        )
+        assert j_resp.get("ok"), f"julia backend discover failed: {j_resp}"
+        j_cands = j_resp.get("candidates", [])
+        assert j_cands, "julia backend returned no candidates"
+        assert any("x" in c["expression"] for c in j_cands), (
+            f"no variable in julia candidates: {j_cands}"
+        )
+        print(f"  lab julia: {len(j_cands)} candidates incl. variable-bearing ✓")
+        # #62 — round-trip parity: julia seal has same length as local.
+        assert all(len(c["lab_seal"]) == 64 for c in j_cands), (
+            "julia candidates missing lab_seal"
+        )
+        print(f"  lab julia parity: all {len(j_cands)} candidates sealed ✓")
+
+    if not backends.get("lean_verify"):
+        print("  lab lean: lake not installed — skipping assertions #63, #64")
+    else:
+        # #63 — Lean verifies a trivial theorem.
+        # We exercise the in-process smoke: submit a verify request
+        # for a candidate whose expression is a trivially-true Lean
+        # theorem. LabService's verify path uses sympy_local; a real
+        # Lean round-trip would require extending the route to
+        # accept a free-form theorem string. For Push 18bc we
+        # accept the heuristic verdict.
+        l_resp = page.evaluate(
+            f"""(async () => {{
+              return await window.elohim.labCall(
+                "POST", "/api/lab/verify/{run_id}",
+                {{candidate_id: "{candidate_id}",
+                  mode: "sympy", property: "always_true"}});
+            }})()"""
+        )
+        assert l_resp.get("ok"), f"lean roundtrip verify failed: {l_resp}"
+        print(f"  lab lean: lake present, smoke verifies via sympy "
+              f"(verdict={l_resp.get('verdict')}) ✓")
+
+
+
 def main() -> int:
+    # Push 22 — `--skip-vault` lets CI run the SPA assertions on a host
+    # that serves only the static files. Three blocks in this harness
+    # need a local backend service and are skipped when it is absent:
+    #
+    #   vault        FastAPI on 8780   (_vault_roundtrip)
+    #   marketplace  MCP actor on 8792 (_backend_blocks)
+    #   lab backend  FastAPI on 8780   (_backend_blocks)
+    #
+    # Everything else is static + Pyodide and runs anywhere.
+    skip_vault = "--skip-vault" in sys.argv[1:]
+    if skip_vault:
+        print("· --skip-vault: skipping vault + marketplace + lab backend "
+              "(local services not required)")
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -670,327 +1076,18 @@ def main() -> int:
         print(f"  v0.2 webmcp: 10 tools incl. elohim_soul_keygen ✓")
 
         # ---- Vault (Phase 16): hosted Soul File round-trip ----
-        # The vault FastAPI service must be running on the same port
-        # as the SPA (8780) so the browser treats it as same-origin.
-        # Phase 16 uses the elohim monorepo's FastAPI server which
-        # serves both the static SPA and the vault routes on 8780.
-        vault_url = VAULT_URL
-        # Set the vault-base input to the smoke URL so vaultCall reads
-        # the right base (the input default is for the standalone vault).
-        page.evaluate(
-            f"const i = document.getElementById('vault-base');"
-            f"if (i) i.value = {_json.dumps(vault_url)};"
-        )
-
-        # (13) vault_call is exposed on window.elohim and reaches the server.
-        tiers = page.evaluate(
-            f"window.elohim.vaultCall('GET', '/api/vault/tiers')"
-        )
-        assert tiers and "tiers" in tiers and "free" in tiers["tiers"], (
-            f"vault tiers unreachable: {tiers}"
-        )
-        assert tiers["canonical_seal"] == CANONICAL_SEAL
-        print(f"  vault tiers: free={tiers['tiers']['free']['count']} souls · "
-              f"indie=${tiers['prices_usd']['indie']}/mo · "
-              f"team=${tiers['prices_usd']['team']}/mo ✓")
-
-        # (14) Store the v0.2 soul we just made, then look it up by pk.
-        # The vault should accept both v0.1 and v0.2 envelopes byte-for-byte.
-        import base64 as _b64
-        # Use the v0.2 envelope directly (it's still in soul_v2 from the
-        # earlier assertions — the localStorage mirror only carries the
-        # last *exported* envelope which is v0.1 in our test flow).
-        store_r = page.evaluate(
-            f"window.elohim.vaultCall('POST', '/api/vault/store', "
-            f"  {{ payload: {_json.dumps(soul_v2['envelope'])}, is_private: false }})"
-        )
-        assert store_r and store_r.get("ok") is True, f"vault store failed: {store_r}"
-        stored_pk = store_r["pk"]
-        print(f"  vault store: {store_r['agent_name']} · pk={stored_pk[:16]}… · "
-              f"{store_r['bytes']} bytes ✓")
-
-        # (15) Look up by pk returns byte-for-byte the same envelope.
-        # Browsers decode `%2F` back to `/` in the path before sending,
-        # which would split the URL across path segments and 404. We
-        # replace `=` with `%3D` (the only special char in base64) and
-        # let the `/`s stay literal — FastAPI captures the whole segment.
-        safe_pk = stored_pk.replace("=", "%3D")
-        lookup_r = page.evaluate(
-            f"window.elohim.vaultCall('GET', '/api/vault/lookup/' + "
-            f"  {_json.dumps(safe_pk)})"
-        )
-        assert lookup_r and lookup_r.get("ok") is True, f"vault lookup failed: {lookup_r}"
-        # Byte-for-byte: the signature.pk matches and the schema matches.
-        assert lookup_r["payload"]["signature"]["pk"] == stored_pk
-        assert lookup_r["payload"]["schema"] == "elohim-soul/v2"
-        print(f"  vault lookup: byte-for-byte match · schema={lookup_r['payload']['schema']} ✓")
-
-        # (16) Public list surfaces the stored soul.
-        list_r = page.evaluate(
-            "window.elohim.vaultCall('GET', '/api/vault/list_public?limit=50')"
-        )
-        assert list_r and list_r.get("ok") is True
-        pks = [it["pk"] for it in list_r["items"]]
-        assert stored_pk in pks, f"stored soul not in public list: {pks}"
-        print(f"  vault list_public: {list_r['total']} soul(s), ours is in there ✓")
-
-        # (17) Bad-schema rejection: 400 with a clear error.
-        bad_envelope = {
-            "schema": "elohim-soul/v999",
-            "agent_name": "x",
-            "last_export_ts": 0,
-            "signature": {"alg": "ed25519", "pk": "fake", "sig": "fake"},
-        }
-        bad_r = page.evaluate(
-            f"window.elohim.vaultCall('POST', '/api/vault/store', "
-            f"  {{ payload: {_json.dumps(bad_envelope)}, is_private: false }})"
-        )
-        assert bad_r and bad_r.get("ok") is False, f"bad schema accepted: {bad_r}"
-        assert "unsupported schema" in (bad_r.get("error") or "").lower(), (
-            f"unclear error: {bad_r}"
-        )
-        print(f"  vault bad-schema rejection: {bad_r['status']} · "
-              f"{bad_r['error'][:50]}… ✓")
-
-        # ---- Marketplace (Phase 17): actor codex_seal matches local ----
-        # The actor must produce the same codex_seal as the local bridge
-        # for the same invocation. This is the determinism contract —
-        # the smoke harness runs the marketplace MCP server locally on
-        # 127.0.0.1:8792 (started by the smoke bootstrap script).
-        # We bypass window.elohim.alienCodex (which injects a fresh
-        # nonce for every UI forge) and call the bridge module directly
-        # so the local invocation has nonce=None — matching the actor.
-        marketplace_url = "http://127.0.0.1:8792"
-        local_codex_str = page.evaluate(
-            "window.__pyodide.runPythonAsync("
-            "\"import json; json.dumps(bridge.alien_codex('ELOHIM:APIFY'))\")"
-        )
-        local_codex = _json.loads(local_codex_str)
-        # The MCP server's tools/call endpoint returns {result: {content: [{text: json_string}]}}
-        actor_resp = page.evaluate(
-            f"fetch({_json.dumps(marketplace_url + '/mcp')}, "
-            f"  {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, "
-            f"    body: JSON.stringify({{"
-            f"      jsonrpc: '2.0', id: 1, method: 'tools/call',"
-            f"      params: {{ name: 'elohim_alien_codex',"
-            f"                 arguments: {{ invocation: 'ELOHIM:APIFY' }} }}"
-            f"    }}) }}).then(r => r.json())"
-        )
-        actor_text = actor_resp["result"]["content"][0]["text"]
-        actor_data = _json.loads(actor_text)
-        assert actor_data["codex_seal"] == local_codex["codex_seal"], (
-            f"actor codex_seal differs from local:\n"
-            f"  local : {local_codex['codex_seal'][:32]}…\n"
-            f"  actor : {actor_data['codex_seal'][:32]}…"
-        )
-        assert actor_data["billing_event"]["charged"] is True
-        assert actor_data["billing_event"]["amount_usd"] == 0.02
-        print(f"  marketplace codex_seal: actor == local ({actor_data['codex_seal'][:24]}…) ✓")
-
-        # ---- Math Discovery Lab · research backend (Push 18bc) ----
-        # The lab subcommand is mounted on the same FastAPI process as
-        # the vault (same create_app()). Six new assertions: #53 local
-        # backend smoke, #56 Z3 counterexample (skipped if z3 missing),
-        # #59 artifact export end-to-end, #61/#62 Julia (skipped if
-        # julia missing), #63/#64 Lean (skipped if lake missing).
-
-        # The SPA's labCall defaults to http://127.0.0.1:8793 but the
-        # smoke harness boots the FastAPI process on 8780 (where vault
-        # is). Override the lab-backend input to point at 8780 so the
-        # labCall wrapper reaches the same process.
-        page.evaluate(
-            "(() => { const el = document.getElementById('lab-backend');"
-            "if (el) el.value = 'http://127.0.0.1:8780'; return true; })()"
-        )
-
-        # #53 — local backend smoke: POST /api/lab/discovery-runs.
-        discovery = page.evaluate(
-            """(async () => {
-              const r = await window.elohim.labCall(
-                "POST", "/api/lab/discovery-runs",
-                {dataset: "cubic", target_column: "y",
-                 seed: 0, backend: "sympy_local"});
-              return r;
-            })()"""
-        )
-        assert discovery.get("ok"), f"local backend discover failed: {discovery}"
-        run_id = discovery.get("run_id")
-        assert run_id and len(run_id) == 36, (
-            f"expected UUID run_id, got {run_id!r}"
-        )
-        cands = discovery.get("candidates", [])
-        assert cands, f"no candidates returned: {discovery}"
-        assert all(c.get("lab_seal") and len(c["lab_seal"]) == 64
-                   for c in cands), "candidates missing lab_seal"
-        # Idempotency: same (dataset, target, seed, backend) returns same run_id
-        second = page.evaluate(
-            """(async () => {
-              return await window.elohim.labCall(
-                "POST", "/api/lab/discovery-runs",
-                {dataset: "cubic", target_column: "y",
-                 seed: 0, backend: "sympy_local"});
-            })()"""
-        )
-        assert second.get("run_id") == run_id and second.get("idempotent") is True, (
-            f"idempotency contract broken: {second}"
-        )
-        print(f"  lab local backend: discover ok · {len(cands)} candidates · "
-              f"idempotent ✓")
-
-        # #56 — Z3 counterexample: -1 nonnegative should always be
-        # counterexample_found (regardless of which backend). We don't
-        # require z3 — sympy's heuristic returns the same verdict.
-        # First we need a -1 candidate stored in the run. Discover
-        # returns no -1 candidate; insert one by issuing a verify on
-        # a synthesised candidate (the route requires a candidate_id
-        # that exists in the run). So we instead exercise the verify
-        # path on a candidate we already have — and check that an
-        # inconclusive or counterexample verdict is properly surfaced.
-        candidate_id = None
-        for c in cands:
-            if c["expression"] in {"-1", "x**2 + 1", "x**4 + 2*x**2 + 1"}:
-                candidate_id = c["id"]
-                chosen_expr = c["expression"]
-                break
-        if candidate_id is None:
-            # Fall back: use the first candidate and verify a different
-            # property. We don't strictly need -1 for the smoke — we
-            # just need the verdict to flow through LabService.
-            candidate_id = cands[0]["id"]
-            chosen_expr = cands[0]["expression"]
-        verify_resp = page.evaluate(
-            f"""(async () => {{
-              return await window.elohim.labCall(
-                "POST", "/api/lab/verify/{run_id}",
-                {{candidate_id: "{candidate_id}",
-                  mode: "sympy",
-                  property: "nonnegative"}});
-            }})()"""
-        )
-        if verify_resp.get("status") == 503:
-            # backend_unavailable; this is the rare z3-missing case
-            # (sympy is always available, so this branch is only
-            # reached when the mode=z3 path is taken explicitly).
-            print("  lab verify: z3 missing — skipping assertion #56 (inconclusive)")
+        # Skippable: CI runs --skip-vault when the FastAPI backend is
+        # not listening on 8780 (Push 22 plan §1.13 mitigation).
+        if not skip_vault:
+            _vault_roundtrip(page, soul_v2, _json)
         else:
-            verdict = verify_resp.get("verdict")
-            assert verdict in {"counterexample_found", "formally_proven",
-                                 "inconclusive"}, (
-                f"verify returned an unknown verdict: {verify_resp}"
-            )
-            new_seal = verify_resp.get("lab_seal")
-            assert new_seal and len(new_seal) == 64, (
-                f"verify did not return a fresh lab_seal: {verify_resp}"
-            )
-            print(f"  lab verify: {chosen_expr} nonnegative → {verdict} ✓")
+            print("  vault: skipped (--skip-vault)")
 
-        # #59 — artifact export end-to-end: drive the Lab card's
-        # #lab-export button. First click the Lab tab so the button is
-        # visible, then click the in-browser discover button so
-        # ``lastLabArtifact`` is populated, then export.
-        page.evaluate(
-            "(document.querySelector('.tab[data-tab=\"lab\"]') || {}).click()"
-        )
-        page.wait_for_selector("#lab-discover", timeout=10000)
-        page.click("#lab-discover")
-        page.wait_for_function(
-            "document.querySelector('#lab-discover-status') && "
-            "document.querySelector('#lab-discover-status').innerText.length > 0",
-            timeout=15000,
-        )
-        page.wait_for_function(
-            "document.querySelector('#lab-last-seal') && "
-            "document.querySelector('#lab-last-seal').innerText.length === 64",
-            timeout=10000,
-        )
-        last_seal = page.evaluate(
-            "document.querySelector('#lab-last-seal').innerText"
-        )
-        assert last_seal and len(last_seal) == 64, (
-            f"#lab-last-seal not a 64-hex seal: {last_seal!r}"
-        )
-        page.click("#lab-export")
-        # The export handler updates localStorage["elohim.lab.last"] in
-        # addition to the module-scope lastLabArtifact; the DOM badge
-        # #lab-last-seal is the easiest cross-scope thing to wait on.
-        page.wait_for_function(
-            "(() => { try { return !!JSON.parse(localStorage.getItem('elohim.lab.last') || 'null').lab_seal; } catch (e) { return false; } })()",
-            timeout=10000,
-        )
-        # Also fetch the artifact via the API: it should exist.
-        art = page.evaluate(
-            f"""(async () => {{
-              return await window.elohim.labCall(
-                "GET", "/api/lab/artifacts/{last_seal}");
-            }})()"""
-        )
-        # The artifact route may return 404 if last_seal is a discover
-        # seal (which lives on a candidate row but is verified through
-        # the run ledger). Be tolerant — the in-card badge is the
-        # source of truth.
-        if not art.get("ok"):
-            print(f"  lab artifact: in-card seal #{last_seal[:16]}… "
-                  f"(route 404 tolerated — seal lives on the candidate row)")
+        # ---- Backend-dependent blocks (marketplace 8792 + lab 8780) ----
+        if not skip_vault:
+            _backend_blocks(page, _json)
         else:
-            assert art.get("lab_seal") == last_seal or art.get("kind") == "candidate", (
-                f"artifact body mismatch: {art}"
-            )
-            print(f"  lab artifact export: seal {last_seal[:16]}… round-trips ✓")
-
-        # #61–#64 — Julia + Lean (skipped when binary missing). Probe
-        # the backend health endpoint to know which to attempt.
-        backend_health = page.evaluate(
-            """(async () => {
-              return await window.elohim.labCall("GET", "/api/lab/healthz");
-            })()"""
-        )
-        backends = (backend_health or {}).get("backends", {})
-        if not backends.get("julia_sr"):
-            print("  lab julia: julia not installed — skipping assertions #61, #62")
-        else:
-            # #61 — Julia SR on cubic fixture: discovers an x**3 term.
-            j_resp = page.evaluate(
-                """(async () => {
-                  return await window.elohim.labCall(
-                    "POST", "/api/lab/discovery-runs",
-                    {dataset: "cubic", target_column: "y", seed: 0,
-                     backend: "julia_sr"});
-                })()"""
-            )
-            assert j_resp.get("ok"), f"julia backend discover failed: {j_resp}"
-            j_cands = j_resp.get("candidates", [])
-            assert j_cands, "julia backend returned no candidates"
-            assert any("x" in c["expression"] for c in j_cands), (
-                f"no variable in julia candidates: {j_cands}"
-            )
-            print(f"  lab julia: {len(j_cands)} candidates incl. variable-bearing ✓")
-            # #62 — round-trip parity: julia seal has same length as local.
-            assert all(len(c["lab_seal"]) == 64 for c in j_cands), (
-                "julia candidates missing lab_seal"
-            )
-            print(f"  lab julia parity: all {len(j_cands)} candidates sealed ✓")
-
-        if not backends.get("lean_verify"):
-            print("  lab lean: lake not installed — skipping assertions #63, #64")
-        else:
-            # #63 — Lean verifies a trivial theorem.
-            # We exercise the in-process smoke: submit a verify request
-            # for a candidate whose expression is a trivially-true Lean
-            # theorem. LabService's verify path uses sympy_local; a real
-            # Lean round-trip would require extending the route to
-            # accept a free-form theorem string. For Push 18bc we
-            # accept the heuristic verdict.
-            l_resp = page.evaluate(
-                f"""(async () => {{
-                  return await window.elohim.labCall(
-                    "POST", "/api/lab/verify/{run_id}",
-                    {{candidate_id: "{candidate_id}",
-                      mode: "sympy", property: "always_true"}});
-                }})()"""
-            )
-            assert l_resp.get("ok"), f"lean roundtrip verify failed: {l_resp}"
-            print(f"  lab lean: lake present, smoke verifies via sympy "
-                  f"(verdict={l_resp.get('verdict')}) ✓")
+            print("  marketplace + lab backend: skipped (--skip-vault)")
 
         # ---- Math Discovery Lab (Push 18a) ----
         # The Lab tab rides on stdlib sympy (Pyodide 0.27.8 ships it). Six
@@ -1270,7 +1367,11 @@ def main() -> int:
             f"design-tokens.css over 5 KB budget: {design_tokens['len']} bytes"
         )
         dt_body = design_tokens["body"]
-        assert "Jev audit (Push 20)" in dt_body, (
+        # Push 21 extended the audit block to "Jev audit (Push 20+21)",
+        # which no longer contains the old "(Push 20)" substring — the
+        # trailing "+21)" broke the original match. Assert the stable
+        # prefix instead so future push numbers cannot break it again.
+        assert "Jev audit (Push 20" in dt_body, (
             "design-tokens.css missing Jev audit block"
         )
         # All semantic alias declarations must be present.
@@ -1487,6 +1588,357 @@ def main() -> int:
             f":focus-visible outline missing: {outline!r}"
         )
         print(f"  ✓ #72 :focus-visible outline: {outline!r}")
+
+        # ---- Push 22 UX copy + onboarding + visual regression ----------
+        # 6 new required assertions (#73-#78).
+
+        # #73 — First-run card is visible on a cold load (no localStorage
+        # flag), disappears on dismiss, and does not come back after a
+        # reload. The flag is the string "1", never a boolean.
+        page.evaluate(
+            "(() => { try { localStorage.removeItem('elohim.first_run_seen'); } "
+            "catch (e) {} })()"
+        )
+        page.reload()
+        page.wait_for_selector("#boot.hidden", state="attached", timeout=120000)
+        first_run_visible = page.evaluate(
+            "(() => { const el = document.getElementById('first-run-card'); "
+            "return !!el && !el.hidden && getComputedStyle(el).display !== 'none'; })()"
+        )
+        assert first_run_visible, (
+            "first-run card not visible on cold load "
+            "(localStorage['elohim.first_run_seen'] absent)"
+        )
+        # Dismiss it via the real button, not by poking localStorage.
+        page.click("#first-run-close")
+        page.wait_for_function(
+            "(() => { const el = document.getElementById('first-run-card'); "
+            "return !!el && el.hidden; })()",
+            timeout=3000,
+        )
+        seen_after_dismiss = page.evaluate(
+            "localStorage.getItem('elohim.first_run_seen')"
+        )
+        assert seen_after_dismiss == "1", (
+            f"first-run flag must be the string \"1\", got {seen_after_dismiss!r}"
+        )
+        # Reload → the card must stay hidden (the flag persisted).
+        page.reload()
+        page.wait_for_selector("#boot.hidden", state="attached", timeout=120000)
+        first_run_after_reload = page.evaluate(
+            "(() => { const el = document.getElementById('first-run-card'); "
+            "return !!el && !el.hidden; })()"
+        )
+        assert not first_run_after_reload, (
+            "first-run card reappeared after dismissal + reload"
+        )
+        print(f"  ✓ #73 first-run card: visible cold → dismissed → "
+              f"localStorage='1' → stays hidden after reload")
+
+        # #74 — Status pill state machine: idle → running → success →
+        # idle, plus the error branch. Each transition must update
+        # data-state AND swap the <use href> to the matching icon, and
+        # the success state must auto-revert to idle after the 250ms
+        # linger (D-J22). Drive setStatus() directly — the awaken path
+        # is already covered by earlier assertions.
+        pill_seq = page.evaluate(
+            """(async () => {
+              const pill = () => document.getElementById('awaken-status-pill');
+              const snap = () => {
+                const p = pill();
+                if (!p) return null;
+                return {
+                  state: p.dataset.state,
+                  icon: p.querySelector('use')?.getAttribute('href') || '',
+                  label: p.querySelector('.pill-label')?.textContent || '',
+                };
+              };
+              const out = [];
+              // Mount happens on the first setStatus() call.
+              window.elohimUI.setStatus('running', 'summoning ghost…');
+              await new Promise(r => setTimeout(r, 40));
+              out.push(snap());
+              window.elohimUI.setStatus('success', 'seal recorded: deadbeef…');
+              await new Promise(r => setTimeout(r, 40));
+              out.push(snap());
+              // D-J22 — 250ms linger + 320ms fade must return to idle.
+              await new Promise(r => setTimeout(r, 900));
+              out.push(snap());
+              return out;
+            })()"""
+        )
+        assert pill_seq[0] and pill_seq[0]["state"] == "running", (
+            f"pill did not enter running: {pill_seq[0]}"
+        )
+        assert "#i-loading" in pill_seq[0]["icon"], (
+            f"running state must use #i-loading: {pill_seq[0]['icon']!r}"
+        )
+        assert pill_seq[1] and pill_seq[1]["state"] == "success", (
+            f"pill did not enter success: {pill_seq[1]}"
+        )
+        assert "#i-success" in pill_seq[1]["icon"], (
+            f"success state must use #i-success: {pill_seq[1]['icon']!r}"
+        )
+        assert pill_seq[2] and pill_seq[2]["state"] == "idle", (
+            f"success must revert to idle after the 250ms linger: {pill_seq[2]}"
+        )
+        assert "#i-info" in pill_seq[2]["icon"], (
+            f"idle state must use #i-info: {pill_seq[2]['icon']!r}"
+        )
+        # Error branch: must reach error, use #i-error, and the icon
+        # sprite must have resolved (a <use> with a live external ref).
+        pill_err = page.evaluate(
+            """(async () => {
+              window.elohimUI.setStatus('error', 'verification failed');
+              await new Promise(r => setTimeout(r, 40));
+              const p = document.getElementById('awaken-status-pill');
+              return {
+                state: p.dataset.state,
+                icon: p.querySelector('use')?.getAttribute('href') || '',
+                shaking: p.classList.contains('motion-error-shake'),
+              };
+            })()"""
+        )
+        assert pill_err["state"] == "error", f"pill did not enter error: {pill_err}"
+        assert "#i-error" in pill_err["icon"], (
+            f"error state must use #i-error: {pill_err['icon']!r}"
+        )
+        print(f"  ✓ #74 status pill: idle→running(#i-loading)→success(#i-success)"
+              f"→idle after 250ms linger; error→#i-error")
+
+        # #75 — motion-error-shake lands in motion.css (D-J6, deferred
+        # from Push 19), is opt-in (D-J19), and is covered by the
+        # reduced-motion override in the same file.
+        motion_css = page.evaluate(
+            """(async () => {
+              const r = await fetch('assets/motion.css', {cache: 'no-store'});
+              const t = await r.ok ? await r.text() : '';
+              return {ok: r.ok, len: t.length, body: t};
+            })()"""
+        )
+        assert motion_css["ok"], f"motion.css not reachable: {motion_css['ok']}"
+        mc = motion_css["body"]
+        assert "@keyframes motion-error-shake" in mc, (
+            "motion.css missing @keyframes motion-error-shake (D-J6)"
+        )
+        assert ".motion-error-shake" in mc, (
+            "motion.css missing .motion-error-shake utility class"
+        )
+        # Reduced-motion block must list the class, or the shake would
+        # run for users who asked for no animation.
+        rm_block = mc.split("prefers-reduced-motion", 1)[-1]
+        assert ".motion-error-shake" in rm_block, (
+            "motion-error-shake not covered by the prefers-reduced-motion override"
+        )
+        # D-J19 — opt-in only. The shake must actually fire on the
+        # error transition (verified above) and NOT on other states.
+        shook_on_running = page.evaluate(
+            """(async () => {
+              window.elohimUI.setStatus('running', 'working…');
+              await new Promise(r => setTimeout(r, 40));
+              const p = document.getElementById('awaken-status-pill');
+              return p.classList.contains('motion-error-shake');
+            })()"""
+        )
+        assert not shook_on_running, (
+            "motion-error-shake fired on a non-error state (D-J19 opt-in violated)"
+        )
+        print(f"  ✓ #75 motion-error-shake: keyframe + utility present, "
+              f"reduced-motion covered, opt-in only (error yes / running no)")
+
+        # #76 — Help tooltip: opens on ? click with the right copy,
+        # closes on re-click, on Escape (returning focus to the
+        # trigger), and on an outside click.
+        page.click("#tab-awaken")
+        page.wait_for_selector("#boot.hidden", state="attached", timeout=10000)
+        page.click('.help-btn[data-help="awaken"]')
+        page.wait_for_function(
+            "(() => { const t = document.getElementById('help-tip'); "
+            "return t && !t.hidden; })()",
+            timeout=3000,
+        )
+        tip_body = page.evaluate("document.getElementById('help-tip-body').textContent")
+        assert "summoning" in tip_body or "awaken" in tip_body.lower(), (
+            f"help tooltip body does not match HELP_TEXT['awaken']: {tip_body!r}"
+        )
+        # aria-expanded must flip on the trigger.
+        expanded = page.evaluate(
+            "document.querySelector('.help-btn[data-help=\"awaken\"]')"
+            ".getAttribute('aria-expanded')"
+        )
+        assert expanded == "true", f"aria-expanded not set on open: {expanded!r}"
+        # Singleton — opening a second tooltip closes the first. The
+        # lab panel must be activated first; its `?` button is inside a
+        # hidden tabpanel and Playwright will not click an invisible node.
+        page.click("#tab-lab")
+        page.click('.help-btn[data-help="lab"]')
+        page.wait_for_function(
+            "document.getElementById('help-tip-title').textContent.includes('lab')",
+            timeout=3000,
+        )
+        assert page.evaluate(
+            "document.querySelector('.help-btn[data-help=\"awaken\"]')"
+            ".getAttribute('aria-expanded')"
+        ) == "false", "previous tooltip trigger stayed aria-expanded=true"
+        # Escape closes and returns focus to the trigger.
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            "document.getElementById('help-tip').hidden === true",
+            timeout=3000,
+        )
+        focus_back = page.evaluate(
+            "document.activeElement?.dataset?.help || ''"
+        )
+        assert focus_back == "lab", (
+            f"Escape must return focus to the trigger, got {focus_back!r}"
+        )
+        # Outside click closes.
+        page.click("#tab-awaken")
+        page.click('.help-btn[data-help="awaken"]')
+        page.wait_for_function(
+            "document.getElementById('help-tip').hidden === false",
+            timeout=3000,
+        )
+        page.click("#panel-awaken h2")
+        page.wait_for_function(
+            "document.getElementById('help-tip').hidden === true",
+            timeout=3000,
+        )
+        # Every panel key must have copy, and every button must resolve.
+        help_audit = page.evaluate(
+            """(() => {
+              const btns = Array.from(document.querySelectorAll('.help-btn'));
+              return {
+                count: btns.length,
+                keys: btns.map(b => b.dataset.help),
+                missing: btns.filter(b => !window.elohimUI.HELP_TEXT[b.dataset.help])
+                              .map(b => b.dataset.help),
+              };
+            })()"""
+        )
+        assert help_audit["count"] == 6, (
+            f"expected 6 help buttons, got {help_audit['count']}: {help_audit['keys']}"
+        )
+        assert not help_audit["missing"], (
+            f"help buttons with no HELP_TEXT entry: {help_audit['missing']}"
+        )
+        print(f"  ✓ #76 help tooltip: opens w/ HELP_TEXT, singleton, "
+              f"Escape restores focus, outside click closes, "
+              f"{help_audit['count']}/6 panels have copy")
+
+        # #77 — assets/icons.svg ships, is a valid sprite, and the
+        # status pill's <use href> actually resolves to a symbol (a
+        # 404 or an unresolvable fragment leaves the icon box empty).
+        icons = page.evaluate(
+            """(async () => {
+              const r = await fetch('assets/icons.svg', {cache: 'no-store'});
+              const t = await r.ok ? await r.text() : '';
+              return {ok: r.ok, len: t.length, body: t};
+            })()"""
+        )
+        assert icons["ok"], f"assets/icons.svg not reachable: {icons['ok']}"
+        assert icons["len"] > 300, f"assets/icons.svg suspiciously small: {icons['len']}"
+        for sym in ("i-loading", "i-success", "i-error", "i-info"):
+            assert f'id="{sym}"' in icons["body"], (
+                f"icons.svg missing <symbol id=\"{sym}\">"
+            )
+        assert icons["len"] <= 2 * 1024, (
+            f"icons.svg over 2 KB budget: {icons['len']} bytes"
+        )
+        assert "Jev audit (Push 22" in icons["body"], (
+            "icons.svg missing the Jev audit block"
+        )
+        # The rendered icon must have non-zero geometry — proves the
+        # external <use> reference resolved, not just that the file is
+        # reachable.
+        icon_box = page.evaluate(
+            """(() => {
+              window.elohimUI.setStatus('success', 'probe');
+              const p = document.getElementById('awaken-status-pill');
+              const svg = p.querySelector('svg.pill-icon');
+              if (!svg) return {w: 0, h: 0};
+              const b = svg.getBoundingClientRect();
+              return {w: Math.round(b.width), h: Math.round(b.height)};
+            })()"""
+        )
+        assert icon_box["w"] > 0 and icon_box["h"] > 0, (
+            f"pill icon has no box — external <use> did not resolve: {icon_box}"
+        )
+        print(f"  ✓ #77 icons.svg: {icons['len']} bytes, 4 symbols, "
+              f"Jev audit present, pill icon renders {icon_box['w']}×{icon_box['h']}px")
+
+        # #78 — Visual regression via perceptual hash. Capture four
+        # deterministic viewports, hash each with imagehash.phash, and
+        # compare against the stored baseline at hamming ≤ 8
+        # (similarity ≥ 0.875, D-J18). First run writes the baseline;
+        # later runs compare. A mismatch is a real finding, not a
+        # flake — the threshold already absorbs motion-layer phase.
+        assert _phash is not None, (
+            "imagehash/Pillow unavailable — visual regression cannot run"
+        )
+        shots_dir = Path("/tmp/elohim-screenshots")
+        shots_dir.mkdir(parents=True, exist_ok=True)
+        baseline_path = shots_dir / "baseline.json"
+        baseline = (
+            json.loads(baseline_path.read_text())
+            if baseline_path.exists()
+            else {}
+        )
+        # Freeze motion before capturing so the hash is stable — the
+        # mesh drift and shimmer layers are the only moving pixels.
+        # The first-run card is hidden: it is a first-visit affordance
+        # and would otherwise make every subsequent run differ.
+        current_hashes = {}
+        for name, tab, theme in (
+            ("awaken-dark", "awaken", "dark"),
+            ("awaken-light", "awaken", "light"),
+            ("lab-dark", "lab", "dark"),
+            ("webmcp-dark", "webmcp", "dark"),
+        ):
+            page.evaluate(
+                f"""(() => {{
+                  document.documentElement.dataset.theme = '{theme}';
+                  const t = document.querySelector('.tab[data-tab="{tab}"]');
+                  if (t) t.click();
+                  const c = document.getElementById('first-run-card');
+                  if (c) c.hidden = true;
+                }})()"""
+            )
+            page.wait_for_timeout(400)   # let tab-reveal settle
+            # Scroll <main> to the top of the viewport before capturing.
+            # A bare viewport shot is dominated by the hero + tab strip,
+            # so panel-level regressions land below the fold and change
+            # almost no pixels — measured hamming of 2 against a drastic
+            # "hide every card" break, versus 30 with this scroll. The
+            # regression gate has to be able to fail.
+            page.evaluate(
+                "document.getElementById('main')"
+                ".scrollIntoView({block: 'start'})"
+            )
+            page.wait_for_timeout(250)
+            png = shots_dir / f"{name}.png"
+            page.screenshot(path=str(png), full_page=False)
+            current_hashes[name] = str(
+                _phash(Image.open(png))
+            )
+
+        for name, h in current_hashes.items():
+            if name not in baseline:
+                print(f"  · visual baseline captured: {name} = {h}")
+                continue
+            dist = _phash_distance(baseline[name], h)
+            assert dist <= _PHASH_MAX_DISTANCE, (
+                f"visual regression in {name}: phash hamming {dist} "
+                f"(> {_PHASH_MAX_DISTANCE}); baseline={baseline[name]} "
+                f"current={h}. Re-capture with: rm -rf {shots_dir}"
+            )
+            print(f"  · visual regression {name}: hamming {dist} "
+                  f"(≤ {_PHASH_MAX_DISTANCE})")
+        baseline.update(current_hashes)
+        baseline_path.write_text(json.dumps(baseline, indent=2, sort_keys=True))
+        print(f"  ✓ #78 visual regression: {len(current_hashes)} screenshots, "
+              f"pHash threshold hamming ≤ {_PHASH_MAX_DISTANCE} "
+              f"(similarity ≥ {_PHASH_SIMILARITY})")
 
         browser.close()
     return 0

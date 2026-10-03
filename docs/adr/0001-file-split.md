@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Accepted (Jev-confirmed, Phase 19) |
+| Status | Accepted (Jev-confirmed, Phase 19) — re-evaluated end of Push 22, still Accepted |
 | Date | 2026-10-03 |
 | Decider | Jev (UX/code-review persona) |
 | Trigger | Push 19 modernization kickoff |
@@ -70,6 +70,27 @@ visual modernization has settled (likely Push 23 or later).
   or boot regression is reported.
 - When the split eventually happens, Jev reviews the boot path change as a
   separate concern (this ADR does not pre-approve it).
+
+## Re-evaluation — end of Push 22
+
+The Push 22 modernization cycle closed without crossing the trigger.
+
+| Signal | Threshold | Actual | Verdict |
+|---|---|---|---|
+| `index.html` line count | 5,500 | **5,024** | below — split stays deferred |
+| Cold-cache boot regression | reported | none reported | below |
+
+The plan projected ~4,748 lines; the real figure is 5,024. The gap is the
+first-run card, status pill, help-tooltip CSS and JS, and the `HELP_TEXT`
+dict — more than the ~200 lines originally budgeted, but still 476 lines of
+headroom before the trigger. Growth rate is now ~240 lines per push
+(4,490 → 5,024 across Pushes 20–22), so the next push or two could reach
+5,500.
+
+**ADR 0001 remains Accepted.** When the split does happen it will be
+ADR 0002, targeting exactly two extracted files (`assets/styles.css` +
+`app.js`) rather than a finer module split, and it must show a cold-cache
+boot under 8 s.
 
 ## Decision record provenance
 

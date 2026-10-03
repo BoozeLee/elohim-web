@@ -14,9 +14,10 @@ Deployed via GitHub Pages on `BoozeLee/elohim-web`. No servers, no build step.
 | `index.html` | The single-page app. Bootstraps Pyodide, fetches the Python source, exposes the API as `window.elohim.*`. 6 tabs: **awaken**, **create**, **arena**, **codex**, **lab**, **webmcp** (+ boot screen). |
 | `py/elohim_summoning/` | The stdlib-only math+sigil instrument, vendored from the monorepo verbatim (11 modules). |
 | `py/elohim_enhanced/` | The numpy-powered creative shard, vendored from the monorepo verbatim (10 modules). |
-| `assets/motion.css` | Vector animation system (Push 19) — 11 keyframes + 10 utility classes + reduced-motion override. Loaded after the inline `<style>` block per Jev decision D-J3. |
+| `assets/motion.css` | Vector animation system (Push 19) — 12 keyframes + 11 utility classes (incl. `.motion-error-shake`) + reduced-motion override. Loaded after the inline `<style>` block per Jev decision D-J3. |
 | `assets/motion-mesh.svg` | Animated SVG mesh layer — 6 nodes + 10×6 grid + 4 connecting paths (SMIL primary, CSS fallback per D-J5). Referenced from `index.html` via `<use href="…#mesh">`. |
 | `assets/design-tokens.css` | Design tokens + light/dark theme (Push 20) + breakpoints + grid utilities + skip-link (Push 21). Loaded BEFORE motion.css per D-J12. |
+| `assets/icons.svg` | Status icon sprite (Push 22) — `#i-loading` / `#i-success` / `#i-error` / `#i-info`, referenced via `<use href="…#i-…">`. |
 | `py/elohim_webapp/bridge.py` | The Pyodide bridge module: pure-Python functions that JS invokes via `pyodide.runPython`. Includes the `alien_codex` Xenomath forge. |
 | `py/elohim_webapp/__init__.py` | Package marker. |
 | `smoke.py` | Local Playwright smoke test — opens the app in headless Chromium, verifies the seal, exercises every public endpoint. |
@@ -224,7 +225,7 @@ JavaScript animation libraries, no third-party bundles.
 
 | Layer | File | What it does |
 |---|---|---|
-| Tokens + keyframes + utilities | [`assets/motion.css`](/home/kilisan/elohim-web/assets/motion.css) | 11 `@keyframes`, 10 utility classes (`.motion-fade-rise`, `.motion-glow-pulse`, `.motion-sigil-breathe`, `.motion-badge-shimmer`, `.motion-mesh-bg`, `.motion-tab-reveal`, `.motion-card-lift`, `.motion-draw-stroke`, `.motion-active-glow`, `.motion-spin-slow`), motion duration + easing variables (`--motion-fast`, `--motion-base`, `--motion-slow`, `--ease-standard`, `--ease-emphasized`, `--ease-decel`), and a reduced-motion override (`@media (prefers-reduced-motion: reduce)`). Jev audit block at top of file documents the design decisions (D-J1…D-J10). |
+| Tokens + keyframes + utilities | [`assets/motion.css`](/home/kilisan/elohim-web/assets/motion.css) | 12 `@keyframes`, 11 utility classes (`.motion-fade-rise`, `.motion-glow-pulse`, `.motion-sigil-breathe`, `.motion-badge-shimmer`, `.motion-mesh-bg`, `.motion-tab-reveal`, `.motion-card-lift`, `.motion-draw-stroke`, `.motion-active-glow`, `.motion-spin-slow`, `.motion-error-shake`), motion duration + easing variables (`--motion-fast`, `--motion-base`, `--motion-slow`, `--ease-standard`, `--ease-emphasized`, `--ease-decel`), and a reduced-motion override (`@media (prefers-reduced-motion: reduce)`). Jev audit block at top of file documents the design decisions (D-J1…D-J10). |
 | Mesh background | [`assets/motion-mesh.svg`](/home/kilisan/elohim-web/assets/motion-mesh.svg) | 6 animated `<circle>` nodes + 10×6 `<line>` grid + 4 connecting `<path>`s, all with SMIL `<animate>` for opacity / `stroke-dashoffset`. CSS fallback for nodes via `.mesh-node` keyframe (D-J5). Container `.motion-mesh-bg` in `motion.css` caps opacity at 0.04 (D-J1) and applies the `motion-mesh-drift` translate animation. |
 
 ### Where motion is applied
@@ -257,6 +258,118 @@ artifacts as part of this push) was decided by Jev as **defer** — full
 rationale in [`docs/adr/0001-file-split.md`](/home/kilisan/elohim-web/docs/adr/0001-file-split.md).
 The mesh SVG is the only asset extracted (per R-E3 in the plan risk
 table), kept as a single source of truth at `assets/motion-mesh.svg`.
+
+## UX copy, onboarding + visual regression (Push 22)
+
+Three components that make the existing functionality legible without
+adding a framework. All of them extend the `.copy-pill` visual grammar
+already in use (mono, 11 px, uppercase, 3 px radius) rather than
+introducing a third visual language.
+
+| Component | Where | What it does |
+|---|---|---|
+| First-run card | `#first-run-card` in `index.html` | One-time "Start here" hint, fixed bottom-right at 16 px, `z-index: 5`. Dismissal writes the string `"1"` to `localStorage["elohim.first_run_seen"]` and animates the card out. Never written as a boolean, so a stale `true` cannot be mistaken for a dismissal. |
+| Status pill | `.status-pill`, mounted by `_pillMount()` | Inline next to the awaken run buttons. Four states driven by `data-state`; every state swaps the `<use href>` to a sprite icon. |
+| Help tooltip | `.help-tip` + `.help-btn` | Singleton tooltip opened from a `?` button injected into the first `.card h2` of each of the six panels. Copy lives in the `HELP_TEXT` dict. |
+| Icon sprite | [`assets/icons.svg`](/home/kilisan/elohim-web/assets/icons.svg) | Four `<symbol>`s (`#i-loading`, `#i-success`, `#i-error`, `#i-info`), 1.5 KB, SMIL-animated spinner. |
+
+### Status pill state machine
+
+`setStatus(state, label)` in `index.html` owns the transitions. It is
+exposed as `window.elohimUI.setStatus` so probes and future features can
+drive it without reaching into internals.
+
+| From → To | Trigger | Visual |
+|---|---|---|
+| → `running` | action started | `#i-loading` (SMIL spinner) |
+| → `success` | action returned | `#i-success`, 250 ms linger, then fade to `idle` |
+| → `error` | action threw | `#i-error` + `.motion-error-shake`, persists until the next action |
+| → `idle` | linger expired, or `error` superseded | `#i-info` |
+
+Invariants:
+
+- Exactly one state at a time.
+- Every `setStatus()` call clears the pending linger timer first, so
+  rapid transitions cannot interleave and strand the pill mid-fade
+  (D-J22).
+- `idle` never writes to `#aria-status`, so the live region cannot
+  become chatty.
+- `.motion-error-shake` is opt-in and applied only on the `error`
+  transition (D-J19); it is removed after 540 ms and re-armed with a
+  forced reflow so a second error re-triggers it.
+
+### motion-error-shake (D-J6)
+
+Landed here after being deferred in Push 19. A 540 ms, three-oscillation
+`translateX` shake, defined in `assets/motion.css`:
+
+```css
+@keyframes motion-error-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX( 4px); }
+}
+```
+
+Transform-only, so it is GPU-accelerated and causes no reflow. It is
+listed in the existing `prefers-reduced-motion` override, so users who
+ask for reduced motion never see it.
+
+### Visual regression (D-J18)
+
+Smoke assertions #77 and #78 add perceptual-hash screenshot comparison.
+Byte-exact diffing is useless here — the mesh, shimmer, and glow layers
+are always on a different frame between runs. Instead each of four
+deterministic viewports (awaken-dark, awaken-light, lab-dark,
+webmcp-dark) is captured and hashed with `imagehash.phash` (64-bit).
+
+Threshold is **hamming ≤ 8** (similarity ≥ 0.875), chosen empirically:
+
+| Similarity | Hamming | Observation |
+|---|---|---|
+| ≥ 0.99 | ≤ 1 | Same render, sub-pixel only |
+| ≥ 0.95 | ≤ 3 | Font-hinting differences |
+| ≥ 0.90 | ≤ 6 | Antialiasing drift |
+| **≥ 0.875** | **≤ 8** | **Push 22 threshold** — absorbs motion-mesh-drift phase |
+| ≥ 0.85 | ≤ 10 | Different render, semantically equivalent (too loose) |
+
+A tighter threshold (≤ 3) produced false-positive regressions on every
+push. Screenshots land in `/tmp/elohim-screenshots/` with hashes in
+`baseline.json`; the first run captures the baseline, later runs compare.
+Re-capture deliberately with `rm -rf /tmp/elohim-screenshots`.
+
+#### Capture strategy matters more than the threshold
+
+A regression gate is only worth having if it can actually fail. The first
+implementation used a bare viewport screenshot and turned out to be
+nearly blind: the viewport is dominated by the hero and the tab strip, so
+panel-level breakage lands below the fold and changes very few pixels.
+Measured against a deliberate "hide every card" break:
+
+| Strategy | Sensitivity | Stability | Verdict |
+|---|---|---|---|
+| viewport | 6 | 6 | blind **and** flaky |
+| `full_page=True` | 32 | 0 | usable |
+| scrolled to `#main` | 30 | 0 | usable — chosen, smaller PNGs |
+
+*Sensitivity* is the hamming distance when every `.card` is hidden;
+*stability* is the distance between two identical captures. The harness
+scrolls `#main` to the top of the viewport before capturing, and hides the
+first-run card, which is a first-visit affordance that would otherwise
+make every run after the first differ.
+
+`reduced_motion="reduce"` is verified separately: under that setting
+`.motion-error-shake` computes to `animation-name: none`, and to
+`motion-error-shake / 0.54s` without it.
+
+### Running smoke without the backend
+
+`smoke.py` needs the FastAPI vault service on port 8780 for the Phase 16
+round-trip. When only the static SPA is available, skip just that block:
+
+```bash
+python3 smoke.py --skip-vault
+```
 
 ## How to deploy
 

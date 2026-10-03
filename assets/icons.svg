@@ -1,0 +1,30 @@
+<!-- Jev audit (Push 22): icons sprite — 4 status icons, SMIL animated;
+     referenced via <use href="assets/icons.svg#i-loading">; no third-party;
+     file size budget ≤ 2 KB. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <defs>
+    <symbol id="i-loading" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-dasharray="20 12" stroke-linecap="round">
+        <animateTransform attributeName="transform" type="rotate"
+                          from="0 8 8" to="360 8 8" dur="0.9s" repeatCount="indefinite"/>
+      </circle>
+    </symbol>
+    <symbol id="i-success" viewBox="0 0 16 16">
+      <path d="M3 8.5l3.5 3.5L13 5" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-error" viewBox="0 0 16 16">
+      <path d="M8 2L1 14h14L8 2z" fill="none" stroke="currentColor"
+            stroke-width="1.5" stroke-linejoin="round"/>
+      <line x1="8" y1="6" x2="8" y2="10" stroke="currentColor"
+            stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="8" cy="12" r="0.8" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <line x1="8" y1="7" x2="8" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="8" cy="4.5" r="0.8" fill="currentColor"/>
+    </symbol>
+  </defs>
+</svg>

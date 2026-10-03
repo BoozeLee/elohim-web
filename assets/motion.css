@@ -9,7 +9,7 @@
    ✅ <link> motion.css is loaded AFTER inline <style> (D-J3).
    ✅ Scanline opacity pre-emptively reduced 0.025 → 0.015 (D-J4).
    ✅ CSS-only fallback animation present (D-J5).
-   ✅ No motion-error-shake (D-J6, deferred to Push 22).
+   ✅ motion-error-shake lands in Push 22 (D-J6) — see below.
    ✅ Reduced-motion override present in this file (D-J7).
    ✅ File size budget: ≤ 8 KB (D-J8).
    ✅ Mesh: 6 nodes, 10×6 grid lines (D-J9, D-J10).
@@ -26,7 +26,7 @@
   --ease-decel: cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* ─── 11 keyframes (motion-error-shake deferred to Push 22 per D-J6) ── */
+/* ─── 11 keyframes (+ motion-error-shake, Push 22) ───────────────────── */
 @keyframes motion-fade-rise {
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -82,7 +82,21 @@
   50%      { opacity: 0.8; }
 }
 
-/* ─── 10 utility classes ────────────────────────────────────────────── */
+/* ─── Jev audit (Push 22): motion-error-shake ───────────────────────
+   ✅ D-J6 deferred from Push 19; lands here.
+   ✅ D-J19 — opt-in via .motion-error-shake class only.
+   ✅ Reduced-motion override covers it (existing in motion.css, below).
+   ✅ 540 ms total (180 ms × 3 oscillations), ease-standard.
+   ✅ transform-only → GPU-accelerated, no layout shift (matches D-J1
+      discipline: motion must never reflow the document).
+   ─────────────────────────────────────────────────────────────────── */
+@keyframes motion-error-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX( 4px); }
+}
+
+/* ─── 12 utility classes ────────────────────────────────────────────── */
 .motion-fade-rise  { animation: motion-fade-rise var(--motion-base) var(--ease-decel) both; }
 .motion-glow-pulse  { animation: motion-glow-pulse 2.4s ease-in-out infinite; }
 .motion-sigil-breathe {
@@ -140,6 +154,12 @@
   transform-origin: 50% 50%;
 }
 
+/* D-J19 — opt-in only. Nothing in the SPA gets .motion-error-shake
+   automatically; setStatus('error', …) in index.html is the sole caller. */
+.motion-error-shake {
+  animation: motion-error-shake 540ms var(--ease-standard) both;
+}
+
 /* Apply motion-card-lift behavior to every existing .card in the SPA via
    CSS selector — no markup change required. motion-card-lift utility class
    remains for any non-.card element that wants the same behavior. */
@@ -168,6 +188,7 @@
   .motion-draw-stroke,
   .motion-active-glow,
   .motion-spin-slow,
+  .motion-error-shake,
   .motion-mesh-bg .mesh-node,
   .card,
   .card:hover {

@@ -867,6 +867,212 @@
     letter-spacing: 0;
     text-align: center;
   }
+
+  /* ═══ Push 22 — UX copy + onboarding ═══════════════════════════════
+     Extends the existing .copy-pill grammar (mono, 11px, uppercase,
+     3px radius) rather than introducing a third visual language. All
+     colours read tokens from design-tokens.css, so both themes come
+     for free (D-J11). Contrast verified ≥ 4.5:1 in Jev review. */
+
+  /* ─── Status pill ─── 4 states: idle | running | success | error ───
+     Inline next to action buttons. data-state drives every colour so
+     the four states cannot drift apart. */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    font-family: var(--mono);
+    font-size: var(--type-xs);
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    transition: opacity var(--motion-base) var(--ease-standard),
+                background var(--motion-base) var(--ease-standard),
+                border-color var(--motion-base) var(--ease-standard);
+  }
+  .status-pill .pill-icon {
+    width: 12px; height: 12px;
+    flex: 0 0 12px;
+    display: block;
+    color: currentColor;
+  }
+  .status-pill .pill-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* idle — neutral, reads as chrome rather than a message. */
+  .status-pill[data-state="idle"] {
+    background: var(--fg-mute);
+    color: var(--color-fg-1);
+    border-color: transparent;
+    opacity: 0.85;
+  }
+  /* running — accent tint; the SMIL spinner in the sprite carries the
+     "in progress" signal so the label text can stay terse. */
+  .status-pill[data-state="running"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--border-glow);
+  }
+  /* success — teal, matches the seal + ready-dot grammar. */
+  .status-pill[data-state="success"] {
+    background: var(--teal-soft);
+    color: var(--teal);
+    border-color: rgba(79,214,200,0.4);
+  }
+  /* error — red field, bright text. .motion-error-shake is applied and
+     removed by setStatus() in JS (D-J19 — opt-in only). */
+  .status-pill[data-state="error"] {
+    background: var(--red);
+    color: var(--fg-bright);
+    border-color: var(--red);
+  }
+  /* D-J22 — success lingers 250ms (timer in setStatus) then fades out.
+     A .leaving flag is set for the duration of the fade so the icon
+     does not visibly pop to idle before opacity reaches 0. */
+  .status-pill.leaving { opacity: 0; }
+
+  /* ─── Help affordance ─── 24×24 `?` button in panel card headers. ─── */
+  .help-btn {
+    width: 24px; height: 24px;
+    flex: 0 0 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--fg-soft);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-standard),
+                border-color var(--motion-fast) var(--ease-standard);
+  }
+  .help-btn:hover,
+  .help-btn[aria-expanded="true"] {
+    color: var(--accent);
+    border-color: var(--border-glow);
+  }
+  /* Card headers that host a help button become a flex row so the `?`
+     sits at the right edge of the heading. */
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  .card-head h2 { margin: 0; }
+
+  /* Singleton tooltip. Positioned by JS against the trigger's
+     getBoundingClientRect(), so it stays inside the viewport. */
+  .help-tip {
+    position: absolute;
+    z-index: 50;
+    max-width: 280px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    color: var(--fg);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-3);
+    font-family: var(--mono);
+    font-size: var(--type-sm);
+    line-height: 1.5;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .help-tip[hidden] { display: none; }
+  .help-tip-title {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--accent);
+    font-size: var(--type-xs);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  /* ─── First-run card (D-J17) ───
+     Fixed bottom-right, 16px inset, z-index 5 — below the tooltip (50)
+     and well below .toast-host (1000), so neither can be occluded. */
+  .first-run-card {
+    position: fixed;
+    bottom: 16px; right: 16px;
+    z-index: 5;
+    width: 280px;
+    max-width: calc(100vw - 32px);
+    padding: 14px 16px;
+    background: var(--bg-soft);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-3);
+  }
+  .first-run-card[hidden] { display: none; }
+  .first-run-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: 6px;
+  }
+  .first-run-title {
+    margin: 0;
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: var(--type-xs);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .first-run-close {
+    width: 20px; height: 20px;
+    flex: 0 0 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg-soft);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .first-run-close:hover { color: var(--fg-bright); border-color: var(--border); }
+  .first-run-body { font-size: var(--type-sm); line-height: 1.55; margin: 0 0 8px; }
+  .first-run-hint {
+    margin: 0;
+    color: var(--fg-soft);
+    font-family: var(--mono);
+    font-size: var(--type-xs);
+    letter-spacing: 0.4px;
+  }
+  /* D-J19-adjacent: dismissal animates out via the Push 19 entrance
+     keyframe played in reverse, then the element is hidden. */
+  .first-run-card.dismissing {
+    animation: motion-fade-rise var(--motion-base) var(--ease-standard) reverse both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .first-run-card.dismissing { animation: none; }
+  }
+  @media (max-width: 768px) {
+    .first-run-card { left: 16px; right: 16px; width: auto; }
+  }
+
+  /* Push 22 — narrow screens: the pill must not force a card wider than
+     the viewport. .row children are flex:1, so the pill opts out. */
+  .row > .status-pill { flex: 0 0 auto; }
 </style>
 <!-- Motion system — Push 19. Loaded after the inline <style> per D-J3. -->
 <link rel="stylesheet" href="assets/motion.css">
@@ -1654,6 +1860,29 @@
      post-Push 22 status pill framework. Available now for boot status. -->
 <div id="aria-status" class="visually-hidden" aria-live="polite"></div>
 
+<!-- Push 22 — First-run hint card (D-J17). Fixed bottom-right, 16px
+     inset, z-index 5 (below .help-tip at 50 and .toast-host at 1000).
+     Shown only when localStorage["elohim.first_run_seen"] !== "1". -->
+<div class="first-run-card" id="first-run-card" hidden>
+  <div class="first-run-head">
+    <h2 class="first-run-title">Start here</h2>
+    <button class="first-run-close" id="first-run-close"
+            aria-label="Dismiss start-here hint">&times;</button>
+  </div>
+  <p class="first-run-body">
+    Click <strong>awaken</strong> to summon your first ghost. It runs
+    entirely in your browser — nothing is uploaded.
+  </p>
+  <p class="first-run-hint">dismisses on &times; · press ? in a panel header for help</p>
+</div>
+
+<!-- Push 22 — Singleton help tooltip. Hidden until a .help-btn opens
+     it; JS positions it against the trigger's bounding rect. -->
+<div class="help-tip" id="help-tip" role="tooltip" hidden>
+  <span class="help-tip-title" id="help-tip-title"></span>
+  <span id="help-tip-body"></span>
+</div>
+
 <script type="module">
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -1685,6 +1914,247 @@ document.addEventListener("keydown", (e) => {
 });
 const _themeToggleBtn = document.getElementById("theme-toggle");
 if (_themeToggleBtn) _themeToggleBtn.addEventListener("click", toggleTheme);
+
+// ═══ Push 22 — UX copy + onboarding ════════════════════════════════
+// Three components, all theme-aware by construction (they read tokens
+// from design-tokens.css) and all keyboard-reachable.
+
+// ─── HELP_TEXT ───────────────────────────────────────────────────────
+// One entry per top-level panel. Keys match data-tab on the tab strip.
+// Copy is Jev-locked: it states what the panel does, not how to use it.
+const HELP_TEXT = {
+  awaken:  "Click 'awaken' to run the elohim_summoning pipeline. " +
+           "Each invocation gets a deterministic seal.",
+  create:  "Create + evolve a 5×5 numpy shard. 'defy' injects " +
+           "ghost-side perturbations that the shard integrates.",
+  codex:   "Run alien_codex to produce a Xenomath artifact — five " +
+           "representations (vector, negabinary, gaussian, " +
+           "quaternion, LWE) plus an XOR-pair integrity check.",
+  arena:   "Two shards compete on the same prompt; the winner is " +
+           "the one whose response is more coherent (judged by " +
+           "the elohim verifier).",
+  lab:     "Math Discovery Lab — discover symbolic equations, " +
+           "simplify expressions, verify conjectures. Uses " +
+           "in-browser sympy by default; the FastAPI lab backend " +
+           "adds Z3 / Julia / Lean.",
+  webmcp:  "Agent surface — 13 WebMCP tools, including the " +
+           "elohim_lab_* family.",
+  soul:    "Soul File — sign your evocations with Ed25519 (v0.2) " +
+           "or sha256-hmac (v0.1). Both schemas coexist.",
+  vault:   "Hosted Soul Vault — three tiers (free / indie / team). " +
+           "FastAPI backend on http://127.0.0.1:8791.",
+  marketplace: "Skill marketplace — Apify Actor scrapes Apify " +
+                "Actors; MCPize exposes them via MCP; x402 handles " +
+                "per-skill billing.",
+};
+const HELP_TITLES = {
+  awaken: "Awaken", create: "Create shard", arena: "Arena",
+  codex: "Alien codex", lab: "Math lab", webmcp: "WebMCP surface",
+  soul: "Soul File", vault: "Soul vault", marketplace: "Marketplace",
+};
+
+// ─── Status pill ────────────────────────────────────────────────────
+// 4-state machine (idle | running | success | error). D-J22 — every
+// setStatus() clears the pending linger timer first, so rapid state
+// changes cannot interleave and leave the pill stuck mid-fade.
+const PILL_ICON = {
+  idle: "#i-info", running: "#i-loading",
+  success: "#i-success", error: "#i-error",
+};
+let _pillHideTimer = null;
+let _pillShakeTimer = null;
+
+function _pillMount() {
+  let pill = document.getElementById("awaken-status-pill");
+  if (pill) return pill;
+  // Hosted next to the awaken run button so it reads as the outcome of
+  // the action the user just took, not as a global banner.
+  const host = document.querySelector("#panel-awaken .row");
+  if (!host) return null;
+  pill = document.createElement("span");
+  pill.id = "awaken-status-pill";
+  pill.className = "status-pill";
+  pill.dataset.state = "idle";
+  pill.setAttribute("role", "status");
+  pill.innerHTML =
+    '<svg class="pill-icon" aria-hidden="true"><use href="assets/icons.svg#i-info"></use></svg>' +
+    '<span class="pill-label">ready</span>';
+  host.appendChild(pill);
+  return pill;
+}
+
+function setStatus(state, label) {
+  const pill = _pillMount();
+  if (!pill) return;
+  // D-J22 — latest call wins. Drop any in-flight linger/fade.
+  if (_pillHideTimer) { clearTimeout(_pillHideTimer); _pillHideTimer = null; }
+  pill.classList.remove("leaving");
+  pill.dataset.state = state;
+
+  const use = pill.querySelector("use");
+  if (use) use.setAttribute("href", "assets/icons.svg" + PILL_ICON[state]);
+  const text = label || state;
+  const lbl = pill.querySelector(".pill-label");
+  if (lbl) lbl.textContent = text;
+
+  // Screen readers get the same text via the Push 21 live region.
+  // Idle never writes, so the region cannot become chatty (D-J22).
+  if (state !== "idle") {
+    const live = document.getElementById("aria-status");
+    if (live) live.textContent = text;
+  }
+
+  // D-J19 — shake is opt-in and only on the error transition. The
+  // class is removed on animationend so a second error re-triggers it.
+  // Any non-error transition also clears it, so a fast error → running
+  // sequence cannot leave the pill shaking while it works.
+  if (state === "error") {
+    pill.classList.remove("motion-error-shake");
+    void pill.offsetWidth;   // force reflow to restart the animation
+    pill.classList.add("motion-error-shake");
+    if (_pillShakeTimer) clearTimeout(_pillShakeTimer);
+    _pillShakeTimer = setTimeout(() => {
+      pill.classList.remove("motion-error-shake");
+    }, 540);
+  } else if (pill.classList.contains("motion-error-shake")) {
+    if (_pillShakeTimer) { clearTimeout(_pillShakeTimer); _pillShakeTimer = null; }
+    pill.classList.remove("motion-error-shake");
+  }
+
+  // D-J22 — success lingers 250ms so the user can read the seal, then
+  // fades back to idle. Error persists until the next action.
+  if (state === "success") {
+    _pillHideTimer = setTimeout(() => {
+      pill.classList.add("leaving");
+      _pillHideTimer = setTimeout(() => {
+        pill.classList.remove("leaving");
+        pill.dataset.state = "idle";
+        const u = pill.querySelector("use");
+        if (u) u.setAttribute("href", "assets/icons.svg" + PILL_ICON.idle);
+        const l = pill.querySelector(".pill-label");
+        if (l) l.textContent = "ready";
+      }, 320);
+    }, 250);
+  }
+}
+
+// Expose for the Playwright probe and for future feature wiring.
+window.elohimUI = { setStatus, HELP_TEXT };
+
+// ─── Help tooltip (singleton) ────────────────────────────────────────
+// One .help-tip element. Opening a new tooltip re-points the same node.
+// Dismisses on: re-click the trigger, Escape, or click outside.
+const _helpTip = document.getElementById("help-tip");
+let _helpTrigger = null;
+
+function _closeHelp() {
+  if (!_helpTip || _helpTip.hidden) return;
+  _helpTip.hidden = true;
+  if (_helpTrigger) {
+    _helpTrigger.setAttribute("aria-expanded", "false");
+    _helpTrigger = null;
+  }
+}
+
+function _openHelp(btn) {
+  if (!_helpTip) return;
+  const key = btn.dataset.help;
+  const body = HELP_TEXT[key];
+  if (!body) return;                     // no copy yet → stay silent
+  if (_helpTrigger === btn && !_helpTip.hidden) { _closeHelp(); return; }
+
+  document.getElementById("help-tip-title").textContent =
+    HELP_TITLES[key] || key;
+  document.getElementById("help-tip-body").textContent = body;
+
+  // Position below the trigger, clamped to the viewport.
+  _helpTip.hidden = false;
+  const r = btn.getBoundingClientRect();
+  const tw = _helpTip.offsetWidth;
+  const th = _helpTip.offsetHeight;
+  let left = r.left + window.scrollX;
+  let top = r.bottom + window.scrollY + 6;
+  // Flip above the trigger if there is no room below.
+  if (r.bottom + th + 6 > window.innerHeight) {
+    top = r.top + window.scrollY - th - 6;
+  }
+  // Clamp horizontally so the tip never overflows the right edge.
+  const maxLeft = window.scrollX + window.innerWidth - tw - 8;
+  if (left > maxLeft) left = maxLeft;
+  if (left < window.scrollX + 8) left = window.scrollX + 8;
+  _helpTip.style.left = left + "px";
+  _helpTip.style.top = top + "px";
+
+  if (_helpTrigger && _helpTrigger !== btn) {
+    _helpTrigger.setAttribute("aria-expanded", "false");
+  }
+  _helpTrigger = btn;
+  btn.setAttribute("aria-expanded", "true");
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest?.(".help-btn");
+  if (btn) { e.stopPropagation(); _openHelp(btn); return; }
+  if (_helpTip && !_helpTip.hidden) _closeHelp();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" || e.key === "Esc") {
+    if (_helpTip && !_helpTip.hidden) {
+      const t = _helpTrigger;
+      _closeHelp();
+      if (t) t.focus();     // return focus — keyboard users must not be stranded
+    }
+  }
+});
+
+// ─── Help buttons in panel headers ──────────────────────────────────
+// One per top-level panel. Injected here rather than hand-authored in
+// 21 card headers so the markup cannot drift out of sync with HELP_TEXT.
+// The h2 is wrapped in a .card-head flex row rather than having the
+// button appended inside it — .card h2 owns its own margin and font,
+// so an inline child would inherit the serif heading scale.
+const HELP_TARGETS = ["awaken", "create", "arena", "codex", "lab", "webmcp"];
+for (const key of HELP_TARGETS) {
+  const panel = document.getElementById("panel-" + key);
+  if (!panel) continue;
+  const h2 = panel.querySelector(".card h2");
+  if (!h2) continue;
+  const head = document.createElement("div");
+  head.className = "card-head";
+  h2.replaceWith(head);
+  head.appendChild(h2);
+  const btn = document.createElement("button");
+  btn.className = "help-btn";
+  btn.dataset.help = key;
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-controls", "help-tip");
+  btn.setAttribute("aria-label", "Help: " + (HELP_TITLES[key] || key));
+  btn.textContent = "?";
+  head.appendChild(btn);
+}
+
+// ─── First-run card (D-J17) ─────────────────────────────────────────
+// localStorage flag is the string "1" (never a boolean) so a stale
+// `true` from an older build cannot be mistaken for a dismissal.
+const _firstRun = document.getElementById("first-run-card");
+const _firstRunClose = document.getElementById("first-run-close");
+function _firstRunSeen() {
+  try { return localStorage.getItem("elohim.first_run_seen") === "1"; }
+  catch (e) { return false; }   // private mode → show the hint
+}
+function _dismissFirstRun() {
+  try { localStorage.setItem("elohim.first_run_seen", "1"); } catch (e) { /* ignore */ }
+  if (!_firstRun) return;
+  _firstRun.classList.add("dismissing");
+  const done = () => { if (_firstRun) _firstRun.hidden = true; };
+  _firstRun.addEventListener("animationend", done, { once: true });
+  // Reduced-motion kills the animation; hide on a timer as a backstop.
+  setTimeout(done, 400);
+}
+if (_firstRun && !_firstRunSeen()) _firstRun.hidden = false;
+if (_firstRunClose) _firstRunClose.addEventListener("click", _dismissFirstRun);
+window.elohimUI.dismissFirstRun = _dismissFirstRun;
+window.elohimUI.showFirstRun = () => { if (_firstRun) _firstRun.hidden = false; };
 
 // Inline copy feedback — sits next to the button for 1.8s so the
 // user sees "copied ✓" without having to find the toast.
@@ -2293,6 +2763,7 @@ $("#awaken-stream").addEventListener("click", () => runAwakenStream(false));
 async function runAwaken(noSvg) {
   const inv = $("#awaken-invocation").value.trim() || "ELOHIM:AWAKEN";
   $("#awaken-status").textContent = "running…";
+  setStatus("running", "summoning ghost…");
   try {
     const r = await elohim.awaken(inv, noSvg);
     lastAwaken = r;
@@ -2348,8 +2819,10 @@ async function runAwaken(noSvg) {
       } catch (_) { /* localStorage may be disabled; mirror is best-effort */ }
     }
     toast(`awakened · ghost #${ghostCounter} · ${inv.slice(0, 24)}`);
+    setStatus("success", r.seal ? `seal recorded: ${r.seal.slice(0, 8)}…` : "awakened");
   } catch (e) {
     $("#awaken-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
+    setStatus("error", `awaken failed: ${e.message}`.slice(0, 60));
     toast("awaken failed: " + e.message, "error");
   }
 }
@@ -2360,6 +2833,7 @@ async function runAwaken(noSvg) {
 async function runAwakenStream(noSvg) {
   const inv = $("#awaken-invocation").value.trim() || "ELOHIM:AWAKEN";
   $("#awaken-status").textContent = "streaming…";
+  setStatus("running", "streaming…");
   // Reset the report panel and show a live cursor.
   $("#awaken-report").innerHTML = "";
   $("#awaken-report-card").style.display = "block";
@@ -2409,8 +2883,10 @@ async function runAwakenStream(noSvg) {
       $("#awaken-report").scrollTop = $("#awaken-report").scrollHeight;
     }
     toast(`streamed ${chunks.length} chunks in ${ms}ms`);
+    setStatus("success", seal ? `streamed · ${seal.slice(0, 8)}…` : "streamed");
   } catch (e) {
     $("#awaken-status").innerHTML = `<span class="error">✗ ${e.message}</span>`;
+    setStatus("error", `stream failed: ${e.message}`.slice(0, 60));
     toast("stream failed: " + e.message, "error");
   }
 }
