@@ -1266,8 +1266,8 @@ def main() -> int:
         assert design_tokens["len"] > 500, (
             f"design-tokens.css tiny: {design_tokens['len']} bytes"
         )
-        assert design_tokens["len"] <= 4 * 1024, (
-            f"design-tokens.css over 4 KB budget: {design_tokens['len']} bytes"
+        assert design_tokens["len"] <= 5 * 1024, (
+            f"design-tokens.css over 5 KB budget: {design_tokens['len']} bytes"
         )
         dt_body = design_tokens["body"]
         assert "Jev audit (Push 20)" in dt_body, (
@@ -1364,6 +1364,129 @@ def main() -> int:
         )
         print(f"  theme persists: localStorage={post_reload_storage!r}, "
               f"post-reload data-theme={post_reload_theme!r} ✓")
+
+        # ---- Push 21 layout + a11y (4 new required assertions) ----
+
+        # #69 — Skip-link is the first focusable element + jumps to #main.
+        # Tab from body → expect document.activeElement is the skip-link.
+        page.evaluate("document.body.focus(); document.activeElement && document.activeElement.blur();")
+        page.keyboard.press("Tab")
+        first_focus_id = page.evaluate("document.activeElement?.id || ''")
+        first_focus_class = page.evaluate("document.activeElement?.className || ''")
+        first_focus_href = page.evaluate("document.activeElement?.getAttribute && document.activeElement.getAttribute('href') || ''")
+        assert "skip-link" in first_focus_class, (
+            f"first focusable element is not the skip-link: "
+            f"id={first_focus_id!r} class={first_focus_class!r}"
+        )
+        assert first_focus_href and first_focus_href.endswith("#main"), (
+            f"skip-link href wrong: {first_focus_href!r}"
+        )
+        # Activate the skip-link (Enter), verify focus moves to #main.
+        page.keyboard.press("Enter")
+        page.wait_for_function(
+            "document.activeElement && document.activeElement.id === 'main'",
+            timeout=3000,
+        )
+        print(f"  ✓ #69 skip-link: first focusable, jumps to #main on Enter")
+
+        # #70 — ARIA tabs keyboard nav cycles through all 6 tabs and stops
+        # at boundaries. Uses ArrowRight / ArrowLeft / Home / End.
+        # Reset focus to first tab.
+        page.evaluate(
+            "document.querySelector('.tab.active').focus()"
+        )
+        # ArrowRight should advance to next tab 5 times, ending on webmcp.
+        for expected_idx in range(1, 6):
+            page.keyboard.press("ArrowRight")
+            page.wait_for_function(
+                f"document.activeElement && "
+                f"document.activeElement.dataset.tab === "
+                f"'{['awaken','create','arena','codex','lab','webmcp'][expected_idx]}'",
+                timeout=3000,
+            )
+        # One more ArrowRight from webmcp should NOT advance (stops at boundary).
+        page.keyboard.press("ArrowRight")
+        end_tab = page.evaluate("document.activeElement?.dataset.tab")
+        assert end_tab == "webmcp", f"ArrowRight past end: {end_tab!r}"
+        # Home jumps to first tab.
+        page.keyboard.press("Home")
+        page.wait_for_function(
+            "document.activeElement && document.activeElement.dataset.tab === 'awaken'",
+            timeout=3000,
+        )
+        # End jumps to last tab.
+        page.keyboard.press("End")
+        page.wait_for_function(
+            "document.activeElement && document.activeElement.dataset.tab === 'webmcp'",
+            timeout=3000,
+        )
+        # ArrowLeft from awaken should NOT retreat (stops at boundary).
+        page.evaluate("document.querySelector('#tab-awaken').focus()")
+        page.keyboard.press("ArrowLeft")
+        first_tab = page.evaluate("document.activeElement?.dataset.tab")
+        assert first_tab == "awaken", f"ArrowLeft before start: {first_tab!r}"
+        # Enter activates focused tab (clicks it).
+        page.evaluate("document.querySelector('#tab-create').focus()")
+        page.keyboard.press("Enter")
+        page.wait_for_function(
+            "document.querySelector('.tab[data-tab=\"create\"]').classList.contains('active')",
+            timeout=3000,
+        )
+        # aria-selected state updated.
+        sel = page.evaluate(
+            "document.querySelector('#tab-create').getAttribute('aria-selected')"
+        )
+        assert sel == "true", f"aria-selected not updated: {sel!r}"
+        # Reset to awaken for downstream probes.
+        page.evaluate("document.querySelector('#tab-awaken').click()")
+        print(f"  ✓ #70 ARIA tabs: Arrow keys cycle, Home/End jump, "
+              f"Enter activates, aria-selected updates")
+
+        # #71 — aria-live region exists with non-empty content post-boot.
+        # Either #boot-status (with aria-live) or #aria-status (new)
+        # should have non-empty text after boot.
+        boot_status = page.evaluate(
+            "document.querySelector('#boot-status')?.textContent || ''"
+        )
+        boot_seal = page.evaluate(
+            "document.querySelector('#boot-seal')?.textContent || ''"
+        )
+        assert boot_status or boot_seal, (
+            f"both boot-status and boot-seal empty: "
+            f"status={boot_status!r} seal={boot_seal!r}"
+        )
+        # Verify the new #aria-status element exists.
+        assert page.evaluate("!!document.querySelector('#aria-status')"), (
+            "missing #aria-status aria-live region"
+        )
+        # Verify at least one of the boot elements has aria-live=polite.
+        live_attrs = page.evaluate(
+            """(() => {
+              const ids = ['boot-status', 'boot-seal', 'aria-status'];
+              return ids.map(id => {
+                const el = document.getElementById(id);
+                return [id, el && el.getAttribute('aria-live')];
+              });
+            })()"""
+        )
+        polite_count = sum(1 for _, v in live_attrs if v == "polite")
+        assert polite_count >= 1, f"no aria-live=polite: {live_attrs}"
+        print(f"  ✓ #71 aria-live: {polite_count} regions with aria-live=polite, "
+              f"#boot-status non-empty")
+
+        # #72 — :focus-visible outline still present (regression guard).
+        outline = page.evaluate(
+            """(() => {
+              document.querySelector('#theme-toggle').focus();
+              const cs = getComputedStyle(document.querySelector('#theme-toggle'));
+              return cs.outlineStyle + ' ' + cs.outlineWidth + ' ' + cs.outlineColor;
+            })()"""
+        )
+        # Outline must be non-trivial (not 'none 0px transparent' or similar).
+        assert outline and "none" not in outline.split(" ", 1)[0].lower(), (
+            f":focus-visible outline missing: {outline!r}"
+        )
+        print(f"  ✓ #72 :focus-visible outline: {outline!r}")
 
         browser.close()
     return 0

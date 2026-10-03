@@ -1,11 +1,7 @@
-/* ─── Jev audit (Push 20) ─────────────────────────────────────────
-   ✅ Tokens are CSS variables — refactors are file-constant.
-   ✅ Light theme is a parallel palette, not dark-inverted (D-J11).
-   ✅ FOUC-safe: loaded AFTER inline <script> that sets data-theme
-      (D-J12 cascade order).
-   ✅ Semantic tokens alias existing tokens — backward compatible.
-   ✅ File size budget: ≤ 4 KB.
-   ─────────────────────────────────────────────────────────────────── */
+/* Jev audit (Push 20+21): tokens CSS variables; light parallel palette
+   (D-J11); FOUC-safe cascade (D-J12); semantic aliases backward-
+   compatible; breakpoints + grid utilities + skip-link (D-J14-D-J16);
+   file size budget ≤ 5 KB after both pushes. */
 
 /* Existing tokens (extracted from index.html :root, lines 23-55) */
 :root {
@@ -68,3 +64,32 @@
   --teal:#2a8a78; --teal-soft:rgba(42,138,120,0.18);
   --green:#2a8a4a; --red:#b82828; --purple:#6a2a90;
 }
+
+/* Push 21 — breakpoints + skip-link + layout utilities (D-J14-D-J16) */
+:root { --bp-sm:640px; --bp-md:768px; --bp-lg:1024px; --bp-xl:1280px; }
+.skip-link {
+  position:absolute; top:0; left:0; padding:8px 12px;
+  background:var(--color-bg-2); color:var(--color-accent);
+  font-family:var(--mono); font-size:12px;
+  text-decoration:none; border:1px solid var(--color-border);
+  border-radius:0 0 var(--radius-md) 0;
+  z-index:100; transform:translateY(-100%);
+  transition:transform var(--motion-fast) var(--ease-standard);
+}
+.skip-link:focus,.skip-link:focus-visible {
+  transform:translateY(0); outline:2px solid var(--color-accent); outline-offset:2px;
+}
+.visually-hidden {
+  position:absolute !important; width:1px; height:1px;
+  padding:0; margin:-1px; overflow:hidden;
+  clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+.stack { display:flex; flex-direction:column; gap:var(--space-4); }
+.cluster { display:flex; flex-wrap:wrap; gap:var(--space-4); align-items:center; }
+.responsive-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));
+  gap:var(--space-5);
+}
+@media (max-width:768px)  { .md\:stack-only { grid-template-columns:1fr !important; } }
+@media (max-width:1024px) { .lg\:stack-only { grid-template-columns:1fr !important; } }

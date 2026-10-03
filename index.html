@@ -897,6 +897,10 @@
   </div>
 </noscript>
 
+<!-- Push 21 — Skip-link (D-J15). First focusable element in <body>;
+     hidden until focused via transform, jumps to #main. -->
+<a class="skip-link" href="#main">Skip to main content</a>
+
 <!-- Mesh bg — Push 19 (R-E3: extracted to assets/motion-mesh.svg). -->
 <div class="motion-mesh-bg" aria-hidden="true">
   <svg class="motion-mesh-svg" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
@@ -1042,30 +1046,43 @@
   </aside>
 </section>
 
-<div class="tabs">
-  <button class="tab active" data-tab="awaken" id="tab-awaken">
+<div class="tabs" role="tablist" aria-label="Main sections">
+  <button class="tab active" data-tab="awaken" id="tab-awaken"
+          role="tab" aria-selected="true" aria-controls="panel-awaken"
+          tabindex="0">
     <span class="ready-dot"></span>awaken · math + sigil
   </button>
-  <button class="tab pending" data-tab="create" id="tab-create">
+  <button class="tab pending" data-tab="create" id="tab-create"
+          role="tab" aria-selected="false" aria-controls="panel-create"
+          tabindex="-1">
     <span class="ready-dot"></span>create · evolve shard
   </button>
-  <button class="tab pending" data-tab="arena" id="tab-arena">
+  <button class="tab pending" data-tab="arena" id="tab-arena"
+          role="tab" aria-selected="false" aria-controls="panel-arena"
+          tabindex="-1">
     <span class="ready-dot"></span>arena · 2 shards
   </button>
-  <button class="tab pending" data-tab="codex" id="tab-codex">
+  <button class="tab pending" data-tab="codex" id="tab-codex"
+          role="tab" aria-selected="false" aria-controls="panel-codex"
+          tabindex="-1">
     <span class="ready-dot"></span>codex · xenomath
   </button>
-  <button class="tab pending" data-tab="lab" id="tab-lab">
+  <button class="tab pending" data-tab="lab" id="tab-lab"
+          role="tab" aria-selected="false" aria-controls="panel-lab"
+          tabindex="-1">
     <span class="ready-dot"></span>lab · discovery
   </button>
-  <button class="tab pending" data-tab="webmcp" id="tab-webmcp">
+  <button class="tab pending" data-tab="webmcp" id="tab-webmcp"
+          role="tab" aria-selected="false" aria-controls="panel-webmcp"
+          tabindex="-1">
     <span class="ready-dot"></span>webmcp · agent surface
   </button>
 </div>
 
-<main>
+<main id="main" tabindex="-1">
   <!-- AWAKEN PANEL -->
-  <section class="panel active" id="panel-awaken">
+  <section class="panel active" id="panel-awaken"
+           role="tabpanel" aria-labelledby="tab-awaken" tabindex="0">
     <div class="grid">
       <div class="card stack">
         <h2>Invocation</h2>
@@ -1224,7 +1241,8 @@
   </section>
 
   <!-- CREATE PANEL -->
-  <section class="panel" id="panel-create">
+  <section class="panel" id="panel-create"
+           role="tabpanel" aria-labelledby="tab-create" tabindex="0">
     <div class="grid">
       <div class="card stack">
         <h2>Shard</h2>
@@ -1308,7 +1326,8 @@
   </section>
 
   <!-- ARENA PANEL -->
-  <section class="panel" id="panel-arena">
+  <section class="panel" id="panel-arena"
+           role="tabpanel" aria-labelledby="tab-arena" tabindex="0">
     <div class="grid">
       <div class="card stack">
         <h2>Setup</h2>
@@ -1346,7 +1365,8 @@
   </section>
 
   <!-- CODEX PANEL (Xenomath Agent Framework — first build target) -->
-  <section class="panel" id="panel-codex">
+  <section class="panel" id="panel-codex"
+           role="tabpanel" aria-labelledby="tab-codex" tabindex="0">
     <div class="grid">
       <div class="card stack">
         <h2>Xenomath codex</h2>
@@ -1426,7 +1446,8 @@
   </section>
 
   <!-- LAB PANEL — Math Discovery Lab (Push 18) -->
-  <section class="panel" id="panel-lab">
+  <section class="panel" id="panel-lab"
+           role="tabpanel" aria-labelledby="tab-lab" tabindex="0">
     <div class="grid">
       <div class="card stack">
         <h2>Lab · dataset</h2>
@@ -1520,7 +1541,8 @@
   </section>
 
   <!-- WEBMCP PANEL — agent surface (Push 7.3 + Push 8 polyfill) -->
-  <section class="panel" id="panel-webmcp">
+  <section class="panel" id="panel-webmcp"
+           role="tabpanel" aria-labelledby="tab-webmcp" tabindex="0">
     <div class="grid">
       <div class="card stack">
         <h2>WebMCP · Agent Surface</h2>
@@ -1624,10 +1646,13 @@
     sha256-sealed <span class="sep">·</span> stdlib only <span class="sep">·</span> client-side
   </div>
   <div class="progress"><div class="bar"><div class="fill" id="boot-fill"></div></div></div>
-  <div class="status" id="boot-status">initializing…</div>
-  <div class="seal-pending" id="boot-seal"></div>
-  <div class="err" id="boot-err"></div>
+  <div class="status" id="boot-status" aria-live="polite">initializing…</div>
+  <div class="seal-pending" id="boot-seal" aria-live="polite"></div>
+  <div class="err" id="boot-err" aria-live="assertive"></div>
 </div>
+<!-- Push 21 — Action-level aria-live status (visually-hidden). Used by
+     post-Push 22 status pill framework. Available now for boot status. -->
+<div id="aria-status" class="visually-hidden" aria-live="polite"></div>
 
 <script type="module">
 const $ = (s) => document.querySelector(s);
@@ -1715,12 +1740,45 @@ const boot = {
   },
 };
 
-// --- tabs ---
-$$(".tab").forEach((t) => t.addEventListener("click", () => {
-  if (t.disabled) return;
-  $$(".tab").forEach((x) => x.classList.toggle("active", x === t));
-  $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + t.dataset.tab));
-}));
+// --- tabs (Push 21: ARIA tabs pattern + keyboard arrow nav per D-J14) ---
+function selectTab(tabEl, opts = {}) {
+  if (!tabEl || tabEl.disabled) return;
+  const tabs = $$(".tab");
+  tabs.forEach((x) => {
+    const isActive = x === tabEl;
+    x.classList.toggle("active", isActive);
+    x.setAttribute("aria-selected", isActive ? "true" : "false");
+    x.tabIndex = isActive ? 0 : -1;
+  });
+  $$(".panel").forEach((p) =>
+    p.classList.toggle("active", p.id === "panel-" + tabEl.dataset.tab)
+  );
+  // Optional: focus the new tab when triggered by keyboard nav (D-J14)
+  if (opts.focus) tabEl.focus();
+}
+// Click handler — unchanged behaviour, now goes through selectTab.
+$$(".tab").forEach((t) => t.addEventListener("click", () => selectTab(t)));
+// Keyboard handler — Left/Right cycle, Home/End jump, Enter/Space activate.
+$$(".tabs")[0]?.addEventListener("keydown", (e) => {
+  const tabs = Array.from($$(".tab")).filter((x) => !x.disabled);
+  if (tabs.length === 0) return;
+  const currentIdx = tabs.findIndex((x) => x === document.activeElement);
+  if (currentIdx < 0) return; // focus isn't on a tab — ignore
+  let nextIdx = currentIdx;
+  switch (e.key) {
+    case "ArrowLeft":
+    case "ArrowUp":    nextIdx = Math.max(0, currentIdx - 1); break;
+    case "ArrowRight":
+    case "ArrowDown":  nextIdx = Math.min(tabs.length - 1, currentIdx + 1); break;
+    case "Home":       nextIdx = 0; break;
+    case "End":        nextIdx = tabs.length - 1; break;
+    case "Enter":
+    case " ":         selectTab(tabs[currentIdx]); e.preventDefault(); return;
+    default: return;
+  }
+  e.preventDefault();
+  selectTab(tabs[nextIdx], { focus: true });
+});
 
 // --- pyodide boot ---
 

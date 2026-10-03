@@ -16,7 +16,7 @@ Deployed via GitHub Pages on `BoozeLee/elohim-web`. No servers, no build step.
 | `py/elohim_enhanced/` | The numpy-powered creative shard, vendored from the monorepo verbatim (10 modules). |
 | `assets/motion.css` | Vector animation system (Push 19) — 11 keyframes + 10 utility classes + reduced-motion override. Loaded after the inline `<style>` block per Jev decision D-J3. |
 | `assets/motion-mesh.svg` | Animated SVG mesh layer — 6 nodes + 10×6 grid + 4 connecting paths (SMIL primary, CSS fallback per D-J5). Referenced from `index.html` via `<use href="…#mesh">`. |
-| `assets/design-tokens.css` | Design tokens + light/dark theme (Push 20) — semantic color/spacing/radius/typography/shadow tokens + `[data-theme="light"]` palette. Loaded BEFORE motion.css per D-J12. |
+| `assets/design-tokens.css` | Design tokens + light/dark theme (Push 20) + breakpoints + grid utilities + skip-link (Push 21). Loaded BEFORE motion.css per D-J12. |
 | `py/elohim_webapp/bridge.py` | The Pyodide bridge module: pure-Python functions that JS invokes via `pyodide.runPython`. Includes the `alien_codex` Xenomath forge. |
 | `py/elohim_webapp/__init__.py` | Package marker. |
 | `smoke.py` | Local Playwright smoke test — opens the app in headless Chromium, verifies the seal, exercises every public endpoint. |
@@ -168,6 +168,53 @@ legibility**, NOT a dark-palette inversion. The brand identity is
 preserved — warm-amber-on-dark → warm-sepia-on-paper. All 13
 foreground/background pairs verified ≥ 4.5:1 contrast (WCAG AA).
 Locked values committed in `design-tokens.css`.
+
+## Layout + accessibility (Push 21)
+
+Push 21 adds a breakpoint scale, three layout utility classes, a
+skip-link, ARIA tabs, and an `aria-live` status region. No new third-
+party deps; everything is pure CSS + vanilla JS.
+
+### What landed
+
+| Change | File | Purpose |
+|---|---|---|
+| `--bp-sm/md/lg/xl` tokens | `assets/design-tokens.css` | Explicit breakpoint scale for media queries |
+| `.stack`, `.cluster`, `.responsive-grid` | `assets/design-tokens.css` | Layout utilities that compose with existing card classes |
+| `.skip-link`, `.visually-hidden` | `assets/design-tokens.css` | First focusable element + screen-reader-only text |
+| `.md\:stack-only`, `.lg\:stack-only` | `assets/design-tokens.css` | Media-query utility classes for collapsing grids on narrow viewports |
+| `<a class="skip-link" href="#main">` | `index.html` | First focusable element; jumps to `<main>` on Enter |
+| `id="main" tabindex="-1"` | `index.html` | `<main>` becomes a programmatic focus target |
+| `role="tablist"`, `aria-label` | `index.html` | Tab strip is an ARIA tablist |
+| `role="tab"`, `aria-selected`, `tabindex`, `aria-controls` | `index.html` | Each tab button is a proper ARIA tab |
+| `role="tabpanel"`, `aria-labelledby`, `tabindex="0"` | `index.html` | Each panel can receive focus + announce itself |
+| `selectTab(tabEl, opts)` + keydown listener | `index.html` | Arrow/Home/End/Enter keyboard nav per W3C ARIA tabs pattern |
+| `aria-live="polite"` on `#boot-status` / `#boot-seal` | `index.html` | Boot status announces to screen-readers |
+| `aria-live="assertive"` on `#boot-err` | `index.html` | Boot errors announced immediately |
+| `<div id="aria-status" class="visually-hidden">` | `index.html` | Action-level status (used by Push 22 status pill) |
+
+### Keyboard navigation (ARIA tabs pattern)
+
+| Key | Action |
+|---|---|
+| `Tab` | Focus enters the tablist at the active tab |
+| `ArrowLeft` / `ArrowUp` | Focus previous tab (stops at first) |
+| `ArrowRight` / `ArrowDown` | Focus next tab (stops at last) |
+| `Home` | Focus first tab |
+| `End` | Focus last tab |
+| `Enter` / `Space` | Activate focused tab |
+
+Text input fields are excluded from the keyboard listener
+(`activeElement.tagName !== INPUT/TEXTAREA/SELECT`) so typing in
+inputs doesn't trigger tab nav.
+
+### Jev decision record
+
+| Decision | Choice |
+|---|---|
+| D-J14 (ARIA tabs) | W3C ARIA tabs pattern; keydown listener is additive (does not intercept clicks); mouse handlers unchanged |
+| D-J15 (skip-link) | Hidden via `transform: translateY(-100%)` until `:focus`; inherits the existing `:focus-visible` outline rule |
+| D-J16 (file budget) | `assets/design-tokens.css` ≤ 4 KB; `assets/motion.css` ≤ 8 KB; total CSS assets ≤ 30 KB (verified post-shrink) |
 
 ## Motion system (Push 19)
 
