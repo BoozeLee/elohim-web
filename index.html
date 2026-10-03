@@ -1376,6 +1376,13 @@
 -1.0,-3.0
 0.0,0.0
 1.0,-1.0"></textarea>
+        <div class="row" style="gap:8px; align-items:center; margin-top:8px;">
+          <label class="meta" style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="lab-backend-toggle" />
+            use research backend
+          </label>
+          <input id="lab-backend" type="text" placeholder="lab fastapi base" value="http://127.0.0.1:8793" style="flex:1;" />
+        </div>
         <button id="lab-discover" style="margin-top:10px;">discover (browser-local sympy)</button>
         <div id="lab-discover-status" class="meta" style="margin-top:8px; min-height:1.4em;"></div>
       </div>
@@ -1933,6 +1940,45 @@ const elohim = {
       return { ok: false, error: `vaultCall failed: ${e.message || e}`,
                method, path };
     }
+  },
+  // Push 18bc — Math Discovery Lab local backend proxy.
+  // Mirrors vaultCall but defaults to the lab port (8793) and lets the
+  // operator toggle the SPA between in-browser sympy and the local
+  // FastAPI surface.
+  labCall: async (method, path, body) => {
+    const base = (document.getElementById("lab-backend") || {}).value
+                  || "http://127.0.0.1:8793";
+    const url = base.replace(/\/$/, "") + path;
+    const init = {
+      method,
+      mode: "cors",
+      credentials: "omit",
+      headers: { "Content-Type": "application/json" },
+    };
+    if (body !== null && body !== undefined) {
+      init.body = JSON.stringify(body);
+    }
+    try {
+      const r = await fetch(url, init);
+      const text = await r.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { parsed = { ok: r.ok, raw: text }; }
+      if (!r.ok) {
+        return {
+          ok: false,
+          error: (parsed && (parsed.detail && parsed.detail.error || parsed.detail || parsed.error)) || text,
+          status: r.status,
+          method, path,
+        };
+      }
+      return parsed;
+    } catch (e) {
+      return { ok: false, error: `labCall failed: ${e.message || e}`,
+               method, path, backend_offline: true };
+    }
+  },
+  labBackendStatus: async () => {
+    return elohim.labCall("GET", "/api/lab/healthz");
   },
 };
 
@@ -3541,21 +3587,38 @@ async function runLabDiscover() {
   const status = $("#lab-discover-status");
   const csv = ($("#lab-csv").value || "").trim();
   const builtin = $("#lab-dataset").value;
-  status.innerHTML = '<span class="meta">discovering…</span>';
+  const useBackend = document.getElementById("lab-backend-toggle")?.checked;
+  status.innerHTML = `<span class="meta">discovering via ${useBackend ? "research backend" : "browser sympy"}…</span>`;
   try {
     const dataset = csv || builtin;
-    const r = await elohim.labDiscover(dataset);
-    if (!r?.ok) throw new Error(r?.error || "discover failed");
+    let r;
+    if (useBackend) {
+      const resp = await elohim.labCall("POST", "/api/lab/discovery-runs", {
+        dataset, target_column: "y", seed: 0, backend: "sympy_local",
+      });
+      if (!resp?.ok) throw new Error(resp?.error || "backend discover failed");
+      // Re-shape the response so the renderer below is uniform.
+      r = {
+        ok: true,
+        candidates: resp.candidates || [],
+        best: (resp.candidates || [])[0] || null,
+        backend: "research_fastapi",
+        run_id: resp.run_id,
+      };
+    } else {
+      r = await elohim.labDiscover(dataset);
+      if (!r?.ok) throw new Error(r?.error || "discover failed");
+    }
     lastLabArtifact = {
       action: "discover",
       dataset_name: builtin,
       csv_inline: !!csv,
       result: r,
       lab_seal: r?.best?.lab_seal || null,
+      backend_path: useBackend ? "research_fastapi" : "browser_sympy",
       ts: new Date().toISOString(),
     };
     _labWriteLast();
-    // Render candidate list
     const items = (r.candidates || []).map((c, i) => {
       const statusBadge = _labStatusBadge(c.status);
       const sealShort = (c.lab_seal || "").slice(0, 16);
@@ -3566,7 +3629,7 @@ async function runLabDiscover() {
       </div>`;
     }).join("");
     $("#lab-candidate-list").innerHTML = items || '<span class="meta">(no candidates)</span>';
-    status.innerHTML = `<span class="ok">✓ discovered ${(r.candidates || []).length} candidates · best=${escapeHtml(r.best?.expression || "—")} · mse_train=${r.best?.mse_train?.toFixed(3)}</span>`;
+    status.innerHTML = `<span class="ok">✓ discovered ${(r.candidates || []).length} candidates via ${useBackend ? "research backend" : "browser sympy"} · best=${escapeHtml(r.best?.expression || "—")} · mse_train=${r.best?.mse_train?.toFixed(3)}</span>`;
     if (r.best?.lab_seal) $("#lab-last-seal").textContent = r.best.lab_seal;
   } catch (e) {
     status.innerHTML = `<span class="error">✗ ${e.message || e}</span>`;

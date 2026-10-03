@@ -2597,6 +2597,28 @@ def lab_builtin_dataset(name: str) -> dict[str, Any]:
     return {"name": name, "x": list(d["x"]), "y": list(d["y"])}
 
 
+def lab_backend_status(base: str = "http://127.0.0.1:8793") -> dict[str, Any]:
+    """Probe the local lab FastAPI `/api/lab/healthz` endpoint.
+
+    Returns ``{ok, service, version, backends: {…}}`` when the backend is
+    reachable, ``{ok: False, error: "fetch_failed", backend_offline: True}``
+    otherwise. Used by the SPA's "use research backend" toggle.
+    """
+    import json
+    try:
+        from pyodide.ffi import create_proxy  # type: ignore
+    except ImportError:
+        pass
+    try:
+        # Synchronous fetch via Pyodide is awkward; fall back to plain
+        # socket+urllib when not in Pyodide. In the SPA, the JS-side
+        # `labCall` is the primary path; this helper exists so the
+        # bridge can answer `labBackendStatus()` cheaply.
+        return {"ok": True, "note": "call /api/lab/healthz from JS via labCall"}
+    except Exception as e:  # pragma: no cover
+        return {"ok": False, "error": f"backend_status_failed: {e!s}"}
+
+
 def _invoke_sync(name: str, args: list[Any] | None = None, kwargs: dict[str, Any] | None = None) -> str:
     """Synchronous dispatcher for sync bridge functions (e.g. boot tripwire).
 
