@@ -1629,6 +1629,10 @@ $("#tab-webmcp").addEventListener("click", async () => {
 const WEBMCP_TOOLS = [
   {
     name: "elohim_awaken",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Summon the elohim daemon. Returns the canonical sha256 seal, the sigil SVG and a markdown report. Each call carries a per-call nonce so two calls return different artifacts; the canonical seal for invocation 'ELOHIM:AWAKEN' (no nonce) is 5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596.",
     inputSchema: {
@@ -1644,6 +1648,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_alien_codex",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Forge the Xenomath codex: a 5-representation composite (vector / symbolic-negabinary / geometric-quaternion / probabilistic-LWE / categorical) sealed with sha256 plus an XOR-pair encrypted_seal. Returns the full Report dict.",
     inputSchema: {
@@ -1658,6 +1666,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_seal_message",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Encrypt a plaintext message under a named channel using SHAKE256 stream cipher (stdlib). Returns {ciphertext, nonce, seal, mode='shake256-xor'}. Pair with elohim_open_seal for round-trip integrity.",
     inputSchema: {
@@ -1677,6 +1689,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_open_seal",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: false,
+
     description:
       "Decrypt a sealed envelope and verify its seal. Inverse of elohim_seal_message.",
     inputSchema: {
@@ -1698,6 +1714,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_ghost_reply",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Send a sealed message to the ghost and receive a sealed reply. Deterministic across machines: any two clients get the same reply envelope for the same inputs.",
     inputSchema: {
@@ -1721,6 +1741,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_version",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: false,
+
     description:
       "Report runtime metadata: name, version, canonical_seal, python version, pyodide_version, runtime. Useful for handshake at the start of any agent session.",
     inputSchema: { type: "object", properties: {} },
@@ -1728,6 +1752,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_soul_export",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Compose and sign a Soul File from the current localStorage mirror — every awakening, sealed message, and the most recent Xenomath codex seal. Schema is elohim-soul/v2 when signing_key_b64 is supplied (Ed25519, co-exists with v0.1 sha256-hmac fallback); schema is elohim-soul/v1 (sha256-hmac) otherwise. The canonical seal for ELOHIM:AWAKEN is 5f12cc7825b595a0df7bf5b97ae471b0bda4d3408474890d2d63548e93ebf596.",
     inputSchema: {
@@ -1750,6 +1778,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_soul_import",
+    risk: "mutating",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Verify and load a Soul File envelope (v0.1 or v0.2) into localStorage. Replaces the mirror arrays atomically. Ed25519 v0.2 envelopes need no passphrase; v0.1 HMAC envelopes need the same passphrase used at export.",
     inputSchema: {
@@ -1765,6 +1797,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_soul_verify",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Signature-only check on a Soul File envelope (v0.1 or v0.2). Returns {ok, signature_ok, tamper_check_ok, schema_ok, checks}. Does NOT load anything into localStorage — pair with elohim_soul_import for the full restore.",
     inputSchema: {
@@ -1780,6 +1816,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_soul_keygen",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: false,
+
     description:
       "Generate a fresh Ed25519 keypair for Soul File v0.2. Returns {ok, pk, sk, alg}. The sk is shown to the operator ONCE — store it. Pk is safe to share. Requires pynacl on the host (lazy import).",
     inputSchema: { type: "object", properties: {} },
@@ -1788,6 +1828,10 @@ const WEBMCP_TOOLS = [
   // --- Math Discovery Lab (Push 18) ---
   {
     name: "elohim_lab_discover",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Math Discovery Lab — rank a small set of conservative candidate expressions (polynomials, sin/cos, log, exp) against a dataset. Returns the top-5 candidates with mse_train, complexity, status='numerically_tested', and a deterministic lab_seal (sha256 over the candidate + lifecycle status + version). Browser-only sympy; no network.",
     inputSchema: {
@@ -1804,6 +1848,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_lab_simplify",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Math Discovery Lab — reduce an expression via sympy.simplify. Returns {ok, simplified, changed, status}. status='numerically_tested' when the expression was structurally reduced; status='draft' when it was already canonical.",
     inputSchema: {
@@ -1817,6 +1865,10 @@ const WEBMCP_TOOLS = [
   },
   {
     name: "elohim_lab_verify",
+    risk: "pure",
+    verification: "in-browser",
+    untrusted: true,
+
     description:
       "Math Discovery Lab — verify a structural claim about an expression. Mode 'sympy' is always-on (returns formally_proven for x**2 + 1 nonnegative, counterexample_found for -1, etc.); mode 'z3' returns backend_unavailable on the browser (use the local FastAPI lab backend for Z3).",
     inputSchema: {
@@ -1869,6 +1921,30 @@ function resolveModelContext() {
   return { mc: null, via: null };
 }
 
+// ─── Push 24 — risk classification (spec §4.3) ────────────────────
+//
+// Each tool declares a `risk`; the WebMCP annotations are DERIVED from
+// it. A tool that hand-wrote its annotations could drift from its own
+// risk declaration; a tool with no risk fails smoke #82 outright.
+//
+// These hints are advisory to the browser/agent, never enforcement —
+// the app must still validate, gate, and confirm. They are also
+// write-only: getTools() never echoes them back (spec §3.5), so the
+// smoke harness asserts against this table, not the browser's view.
+const RISK_ANNOTATIONS = {
+  pure: { readOnlyHint: true },
+  mutating: { readOnlyHint: false },
+  consequential: { readOnlyHint: false },
+};
+
+function deriveAnnotations(tool) {
+  const base = RISK_ANNOTATIONS[tool.risk];
+  if (!base) {
+    throw new Error(`unknown risk "${tool.risk}" for ${tool.name}`);
+  }
+  return { ...base, untrustedContentHint: tool.untrusted === true };
+}
+
 // Every registration path routes through here, so a tool is validated and
 // dispatched in exactly one place. Task 4 adds the unknown-argument gate
 // as the first statement of this function.
@@ -1884,6 +1960,7 @@ window.__elohimToolNames = () => WEBMCP_TOOLS.map((t) => t.name);
 window.__elohimToolTable = () =>
   WEBMCP_TOOLS.map(({ name, description, inputSchema, risk, verification }) =>
     ({ name, description, inputSchema, risk, verification }));
+window.__elohimDeriveAnnotations = (t) => deriveAnnotations(t);
 
 async function registerWebMcpTools() {
   const status = $("#webmcp-status");
@@ -1912,6 +1989,8 @@ async function registerWebMcpTools() {
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema,
+          // Derived from t.risk, never hand-written per tool.
+          ...deriveAnnotations(t),
           execute: async (args) => runTool(t, args),
         });
         webmcpRegistered.push(t.name);

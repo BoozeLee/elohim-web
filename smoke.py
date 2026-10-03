@@ -2089,6 +2089,76 @@ def webmcp_contract_assertions() -> int:
     )
     print(f"  ✓ #81 inventory: {len(expected)} tools discovered")
 
+    with ModelContextProbe(url=url) as probe:
+        page = probe.page
+        page.goto(url)
+        page.wait_for_selector("#boot.hidden", state="attached", timeout=300000)
+        table = page.evaluate("() => window.__elohimToolTable()")
+
+        # #82 — every tool declares a risk and a verification level.
+        RISK = {"pure", "mutating", "consequential"}
+        VERIF = {"in-browser", "external", "stub"}
+        for t in table:
+            assert t["risk"] in RISK, f"{t['name']}: bad risk {t['risk']!r}"
+            assert t["verification"] in VERIF, (
+                f"{t['name']}: bad verification {t['verification']!r}")
+        print(f"  ✓ #82 risk/verification declared on all {len(table)} tools")
+
+        # #83 — annotations are DERIVED from risk, not hand-written at each
+        # registration site. A tool that ships with a hand-written annotation
+        # cannot drift; one that doesn't is unannotated.
+        d = page.evaluate(
+            "() => window.__elohimDeriveAnnotations({risk:'pure'})")
+        assert d == {"readOnlyHint": True, "untrustedContentHint": False}, d
+        d = page.evaluate(
+            "() => window.__elohimDeriveAnnotations({risk:'mutating'})")
+        assert d == {"readOnlyHint": False, "untrustedContentHint": False}, d
+        d = page.evaluate(
+            "() => window.__elohimDeriveAnnotations({risk:'consequential'})")
+        assert d == {"readOnlyHint": False, "untrustedContentHint": False}, d
+        # Output carrying user-controlled text must be flagged.
+        d = page.evaluate(
+            "() => window.__elohimDeriveAnnotations("
+            "{risk:'pure', untrusted:true})")
+        assert d == {"readOnlyHint": True, "untrustedContentHint": True}, d
+        print(f"  ✓ #83 annotations derived from risk "
+              f"(pure→readOnly, untrusted→untrustedContent)")
+
+        # #85 — Review Focus #1 and #2. Risk is MEASURED, not declared.
+        #
+        # Two conditions make the measurement valid, both found the hard way:
+        #   (a) per-call isolation — batching attributes a write to the wrong
+        #       tool;
+        #   (b) success asserted FIRST — a rejected call writes nothing and
+        #       would read as "pure", certifying a broken tool as safe
+        #       precisely when it never ran.
+        #
+        # The polyfill signals success as result.resultType === 'complete'
+        # and carries NO `ok` key, so a check on result.ok reads every call
+        # as failed.
+        declared = {t["name"]: t["risk"] for t in table}
+        for name in ("elohim_version", "elohim_soul_keygen", "elohim_lab_simplify"):
+            before = page.evaluate("() => JSON.stringify(localStorage)")
+            outcome = page.evaluate("""async (n) => {
+              const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+                method:'tools/call', params:{name:n, arguments:{}}});
+              const res = r && r.result;
+              return {ok: !!res && res.resultType === 'complete',
+                      err: (res && (res.error || res.content?.[0]?.text)) || null};
+            }""", name)
+            after = page.evaluate("() => JSON.stringify(localStorage)")
+            assert outcome["ok"], (
+                f"{name} did not complete: {str(outcome['err'])[:80]} — a "
+                f"rejected call writes nothing and would read as 'pure'"
+            )
+            assert before == after, (
+                f"{name} is declared {declared[name]!r} but mutated "
+                f"localStorage; the declaration is the hypothesis, the "
+                f"state delta is the measurement"
+            )
+        print(f"  ✓ #85 measured risk: 3 declared-pure tools completed "
+              f"with zero localStorage delta")
+
     return 0
 
 
