@@ -983,6 +983,9 @@
   <button class="tab pending" data-tab="codex" id="tab-codex">
     <span class="ready-dot"></span>codex · xenomath
   </button>
+  <button class="tab pending" data-tab="lab" id="tab-lab">
+    <span class="ready-dot"></span>lab · discovery
+  </button>
   <button class="tab pending" data-tab="webmcp" id="tab-webmcp">
     <span class="ready-dot"></span>webmcp · agent surface
   </button>
@@ -1350,6 +1353,93 @@
     </div>
   </section>
 
+  <!-- LAB PANEL — Math Discovery Lab (Push 18) -->
+  <section class="panel" id="panel-lab">
+    <div class="grid">
+      <div class="card stack">
+        <h2>Lab · dataset</h2>
+        <p class="meta" style="margin:0 0 8px 0;">
+          Push 18. Pick a built-in benchmark (cubic / sine_decay / lorenz_x)
+          or paste a small CSV (header + two numeric columns). The Lab runs
+          sympy locally — no network, no extra wheel.
+        </p>
+        <div class="row" style="gap:8px; align-items:center;">
+          <label class="meta" for="lab-dataset">built-in:</label>
+          <select id="lab-dataset" style="flex:1;">
+            <option value="cubic">cubic (y = x**3 - 2x + noise)</option>
+            <option value="sine_decay">sine_decay (y = sin(3x) * exp(-0.3x))</option>
+            <option value="lorenz_x">lorenz_x (Lorenz x(t) at dt=0.01)</option>
+          </select>
+        </div>
+        <label class="meta" for="lab-csv">or paste CSV (optional):</label>
+        <textarea id="lab-csv" rows="3" spellcheck="false" placeholder="x,y
+-1.0,-3.0
+0.0,0.0
+1.0,-1.0"></textarea>
+        <button id="lab-discover" style="margin-top:10px;">discover (browser-local sympy)</button>
+        <div id="lab-discover-status" class="meta" style="margin-top:8px; min-height:1.4em;"></div>
+      </div>
+
+      <div class="card stack">
+        <h2>Candidates</h2>
+        <div id="lab-candidate-list" class="stack" style="gap:6px;">
+          <span class="meta">(not yet discovered)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:18px;">
+      <div class="card stack">
+        <h2>Simplify</h2>
+        <p class="meta" style="margin:0 0 8px 0;">
+          Reduce an expression via <code>sympy.simplify</code>. The original
+          and the reduced form are shown side-by-side with a status pill.
+        </p>
+        <input id="lab-simplify-input" type="text" value="sin(x)**2 + cos(x)**2" />
+        <button id="lab-simplify" style="margin-top:8px;">simplify</button>
+        <div class="meta" id="lab-simplify-status" style="margin-top:8px; min-height:1.4em;"></div>
+        <pre class="report" id="lab-simplify-output" style="margin-top:6px;">(awaiting input)</pre>
+      </div>
+
+      <div class="card stack">
+        <h2>Verify</h2>
+        <p class="meta" style="margin:0 0 8px 0;">
+          Check a structural claim. <code>sympy</code> mode is always-on;
+          <code>z3</code> returns <code>backend_unavailable</code> on the
+          browser (use the local FastAPI lab backend for Z3).
+        </p>
+        <input id="lab-verify-input" type="text" value="x**2 + 1" />
+        <div class="row" style="gap:8px; margin-top:8px;">
+          <select id="lab-verify-mode" style="flex:1;">
+            <option value="sympy">mode: sympy</option>
+            <option value="z3">mode: z3</option>
+          </select>
+          <select id="lab-verify-property" style="flex:1;">
+            <option value="nonnegative">property: nonnegative</option>
+            <option value="always_true">property: always_true</option>
+          </select>
+        </div>
+        <button id="lab-verify" style="margin-top:8px;">verify</button>
+        <div class="meta" id="lab-verify-status" style="margin-top:8px; min-height:1.4em;"></div>
+        <pre class="report" id="lab-verify-output" style="margin-top:6px;">(awaiting input)</pre>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px;">
+      <h2>Lab artifact</h2>
+      <p class="meta" style="margin:0 0 8px 0;">
+        Every discover → verify pair is stamped with a <code>lab_seal</code>
+        (sha256 over the candidate + lifecycle status + version). Click
+        <em>export last artifact</em> to download the JSON.
+      </p>
+      <div class="row" style="gap:8px; align-items:center;">
+        <span class="meta">last seal:</span>
+        <code id="lab-last-seal" class="seal-display" style="flex:1;">(none)</code>
+        <button id="lab-export">export last artifact</button>
+      </div>
+    </div>
+  </section>
+
   <!-- WEBMCP PANEL — agent surface (Push 7.3 + Push 8 polyfill) -->
   <section class="panel" id="panel-webmcp">
     <div class="grid">
@@ -1591,6 +1681,7 @@ async function bootPyodide() {
     elohim_webapp: [
       "bridge.py",
       "_pure25519.py",
+      "lab_seal.py",
     ],
   };
 
@@ -1623,12 +1714,18 @@ import elohim_summoning
 import elohim_webapp.bridge as bridge
   `);
 
-  // Eagerly load numpy + every elohim_enhanced submodule. We do this at
-  // boot (not lazily) because the first call to loadPackagesFromImports
-  // from inside an event handler can hang on Pyodide 0.27.x — pulling it
-  // out of the click flow keeps the UX snappy and avoids that race.
-  boot.setStatus("loading numpy (one-time, ~5MB)…", 88);
+  // Eagerly load numpy + sympy + every elohim_enhanced submodule. We do
+  // this at boot (not lazily) because the first call to
+  // loadPackagesFromImports from inside an event handler can hang on
+  // Pyodide 0.27.x — pulling it out of the click flow keeps the UX snappy
+  // and avoids that race.
+  boot.setStatus("loading numpy (one-time, ~5MB)…", 85);
   await localPyodide.loadPackagesFromImports("import numpy");
+  // Push 18 (Lab tab) needs sympy for in-browser symbolic-regression and
+  // verification. Pyodide 0.27.x does NOT ship sympy by default; load
+  // it eagerly at boot so the first lab action is snappy.
+  boot.setStatus("loading sympy (one-time, ~20MB)…", 88);
+  await localPyodide.loadPackage("sympy");
   await localPyodide.runPythonAsync(`
 import elohim_enhanced.cli
 import elohim_enhanced.creative
@@ -1764,6 +1861,21 @@ const elohim = {
   // Apify Actor and MCP server (verified by the smoke harness).
   alienCodex: (invocation) =>
     call("alien_codex", { invocation, nonce: freshNonce("codex") }),
+  // Math Discovery Lab (Push 18) — thin wrappers around the local
+  // sympy-only bridge. Heavy Z3 / Julia / Lean features live on the
+  // monorepo's `elohim-web lab` FastAPI subcommand (Push 18b+).
+  labVersion: () => call("lab_version"),
+  labDatasets: () => call("lab_builtin_datasets"),
+  labDataset: (name) => call("lab_builtin_dataset", { name }),
+  labDiscover: (dataset, opts) =>
+    call("lab_discover", { dataset, target_column: "y", operators: null, seed: 0, ...(opts || {}) }),
+  labSimplify: (expression) => call("lab_simplify", { expression_str: expression }),
+  labVerify: (expression, mode, property) =>
+    call("lab_verify", {
+      expression_str: expression,
+      mode: mode || "sympy",
+      property: property || "nonnegative",
+    }),
   // Soul File (Push 14 v0.1 + Push 15 v0.2) — portable, signed agent
   // identity. Mirrors live in localStorage under elohim.soul.*; export
   // reads them and signs an envelope (v0.1 sha256-hmac by default, v0.2
@@ -2879,6 +2991,56 @@ const WEBMCP_TOOLS = [
     inputSchema: { type: "object", properties: {} },
     invoke: () => call("soul_keygen"),
   },
+  // --- Math Discovery Lab (Push 18) ---
+  {
+    name: "elohim_lab_discover",
+    description:
+      "Math Discovery Lab — rank a small set of conservative candidate expressions (polynomials, sin/cos, log, exp) against a dataset. Returns the top-5 candidates with mse_train, complexity, status='numerically_tested', and a deterministic lab_seal (sha256 over the candidate + lifecycle status + version). Browser-only sympy; no network.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dataset: {
+          type: "string",
+          description: "A built-in name ('cubic', 'sine_decay', 'lorenz_x') or an inline CSV string.",
+        },
+      },
+      required: ["dataset"],
+    },
+    invoke: ({ dataset }) => call("lab_discover", { dataset, target_column: "y" }),
+  },
+  {
+    name: "elohim_lab_simplify",
+    description:
+      "Math Discovery Lab — reduce an expression via sympy.simplify. Returns {ok, simplified, changed, status}. status='numerically_tested' when the expression was structurally reduced; status='draft' when it was already canonical.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        expression: { type: "string", description: "The expression to simplify, e.g. 'sin(x)**2 + cos(x)**2'." },
+      },
+      required: ["expression"],
+    },
+    invoke: ({ expression }) => call("lab_simplify", { expression_str: expression }),
+  },
+  {
+    name: "elohim_lab_verify",
+    description:
+      "Math Discovery Lab — verify a structural claim about an expression. Mode 'sympy' is always-on (returns formally_proven for x**2 + 1 nonnegative, counterexample_found for -1, etc.); mode 'z3' returns backend_unavailable on the browser (use the local FastAPI lab backend for Z3).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        expression: { type: "string", description: "The expression to verify." },
+        mode: { type: "string", description: "'sympy' (always) or 'z3' (local-only)." },
+        property: { type: "string", description: "'nonnegative' or 'always_true'." },
+      },
+      required: ["expression"],
+    },
+    invoke: ({ expression, mode, property }) =>
+      call("lab_verify", {
+        expression_str: expression,
+        mode: mode || "sympy",
+        property: property || "nonnegative",
+      }),
+  },
 ];
 
 async function registerWebMcpTools() {
@@ -3365,6 +3527,171 @@ async function runMarketplaceForge() {
   }
 }
 $("#marketplace-run").addEventListener("click", runMarketplaceForge);
+
+// ---------- Math Discovery Lab handlers (Push 18) ----------
+//
+// All three handlers run in-browser (stdlib sympy via Pyodide); no network,
+// no extra wheel. Every successful discover/simplify/verify updates
+// ``localStorage["elohim.lab.last"]`` so the boot tripwire can show a
+// "last verified" pill (smoke assertion #57).
+
+let lastLabArtifact = null;
+
+async function runLabDiscover() {
+  const status = $("#lab-discover-status");
+  const csv = ($("#lab-csv").value || "").trim();
+  const builtin = $("#lab-dataset").value;
+  status.innerHTML = '<span class="meta">discovering…</span>';
+  try {
+    const dataset = csv || builtin;
+    const r = await elohim.labDiscover(dataset);
+    if (!r?.ok) throw new Error(r?.error || "discover failed");
+    lastLabArtifact = {
+      action: "discover",
+      dataset_name: builtin,
+      csv_inline: !!csv,
+      result: r,
+      lab_seal: r?.best?.lab_seal || null,
+      ts: new Date().toISOString(),
+    };
+    _labWriteLast();
+    // Render candidate list
+    const items = (r.candidates || []).map((c, i) => {
+      const statusBadge = _labStatusBadge(c.status);
+      const sealShort = (c.lab_seal || "").slice(0, 16);
+      const mse = c.mse_train != null ? c.mse_train.toFixed(3) : "—";
+      return `<div class="card" style="padding:8px 10px;">
+        <div><strong>#${i + 1}</strong> · <code>${escapeHtml(c.expression)}</code> · mse_train=${mse} · complexity=${c.complexity}</div>
+        <div class="meta">${statusBadge} · seal ${sealShort}…</div>
+      </div>`;
+    }).join("");
+    $("#lab-candidate-list").innerHTML = items || '<span class="meta">(no candidates)</span>';
+    status.innerHTML = `<span class="ok">✓ discovered ${(r.candidates || []).length} candidates · best=${escapeHtml(r.best?.expression || "—")} · mse_train=${r.best?.mse_train?.toFixed(3)}</span>`;
+    if (r.best?.lab_seal) $("#lab-last-seal").textContent = r.best.lab_seal;
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ ${e.message || e}</span>`;
+  }
+}
+
+async function runLabSimplify() {
+  const status = $("#lab-simplify-status");
+  const out = $("#lab-simplify-output");
+  const expr = $("#lab-simplify-input").value.trim();
+  if (!expr) {
+    status.innerHTML = '<span class="error">empty input</span>';
+    return;
+  }
+  status.innerHTML = '<span class="meta">simplifying…</span>';
+  try {
+    const r = await elohim.labSimplify(expr);
+    if (!r?.ok) throw new Error(r?.error || "simplify failed");
+    out.textContent = JSON.stringify(r, null, 2);
+    const badge = _labStatusBadge(r.status);
+    status.innerHTML = `<span class="${r.changed ? "ok" : "meta"}">${badge} · ${r.changed ? "reduced" : "already canonical"}</span>`;
+    lastLabArtifact = {
+      action: "simplify",
+      input: expr,
+      result: r,
+      lab_seal: null,
+      ts: new Date().toISOString(),
+    };
+    _labWriteLast();
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ ${e.message || e}</span>`;
+  }
+}
+
+async function runLabVerify() {
+  const status = $("#lab-verify-status");
+  const out = $("#lab-verify-output");
+  const expr = $("#lab-verify-input").value.trim();
+  const mode = $("#lab-verify-mode").value;
+  const property = $("#lab-verify-property").value;
+  if (!expr) {
+    status.innerHTML = '<span class="error">empty input</span>';
+    return;
+  }
+  status.innerHTML = '<span class="meta">verifying…</span>';
+  try {
+    const r = await elohim.labVerify(expr, mode, property);
+    out.textContent = JSON.stringify(r, null, 2);
+    const verdict = r.verdict || "inconclusive";
+    const ok = verdict === "formally_proven";
+    const counterexample = verdict === "counterexample_found";
+    const cls = ok ? "ok" : counterexample ? "error" : "meta";
+    status.innerHTML = `<span class="${cls}">${escapeHtml(verdict)} · ${escapeHtml(property)} · mode=${escapeHtml(mode)}</span>`;
+    lastLabArtifact = {
+      action: "verify",
+      input: expr,
+      mode, property,
+      result: r,
+      lab_seal: null,
+      ts: new Date().toISOString(),
+    };
+    _labWriteLast();
+  } catch (e) {
+    status.innerHTML = `<span class="error">✗ ${e.message || e}</span>`;
+  }
+}
+
+function _labWriteLast() {
+  try {
+    const payload = {
+      ts: lastLabArtifact?.ts || null,
+      action: lastLabArtifact?.action || null,
+      lab_seal: lastLabArtifact?.lab_seal || null,
+    };
+    localStorage.setItem("elohim.lab.last", JSON.stringify(payload));
+  } catch (_) {
+    /* localStorage may be unavailable; fail silently */
+  }
+}
+
+function _labStatusBadge(status) {
+  const colour = {
+    draft: "var(--fg-soft)",
+    numerically_tested: "var(--accent)",
+    formally_proven: "var(--ok, #5fc28b)",
+    counterexample_found: "var(--error, #d96f6f)",
+    inconclusive: "var(--fg-soft)",
+    rejected: "var(--fg-soft)",
+  }[status] || "var(--fg-soft)";
+  return `<span style="color:${colour}; font-weight:600;">${escapeHtml(status || "—")}</span>`;
+}
+
+async function labExportArtifact() {
+  if (!lastLabArtifact) {
+    $("#lab-discover-status").innerHTML =
+      '<span class="error">no lab artifact yet — discover, simplify, or verify first</span>';
+    return;
+  }
+  const blob = new Blob([JSON.stringify(lastLabArtifact, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const stamp = (lastLabArtifact.ts || new Date().toISOString())
+    .replace(/[:.]/g, "-");
+  a.download = `elohim-lab-${lastLabArtifact.action}-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 100);
+}
+
+$("#lab-discover").addEventListener("click", runLabDiscover);
+$("#lab-simplify").addEventListener("click", runLabSimplify);
+$("#lab-verify").addEventListener("click", runLabVerify);
+$("#lab-export").addEventListener("click", labExportArtifact);
+
+// Paint the last lab seal from localStorage on boot (if any).
+try {
+  const _last = JSON.parse(localStorage.getItem("elohim.lab.last") || "null");
+  if (_last?.lab_seal) $("#lab-last-seal").textContent = _last.lab_seal;
+} catch (_) { /* ignore */ }
 
 $("#codex-copy-seal").addEventListener("click", async () => {
   if (!lastCodexResult?.codex_seal) return;

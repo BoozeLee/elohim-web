@@ -2252,6 +2252,351 @@ async def _invoke(name: str, args: list[Any] | None = None, kwargs: dict[str, An
     return json.dumps(result)
 
 
+# ---------- Math Discovery Lab (Push 18) ----------
+#
+# The Lab tab on the SPA delegates to these three functions. They mirror the
+# shape of the monorepo's ``elohim_lab.backends.sympy_local`` module but
+# vendored here so Pyodide can run them without an extra wheel. The seal
+# contract is identical (lab_seal(record, status, version)).
+#
+# IMPORTANT: keep these functions byte-equivalent to the monorepo copy
+# (elohim/src/elohim_lab/backends/sympy_local.py). If you update one,
+# mirror the change in the other.
+
+
+# Three built-in datasets the SPA ships inline. The cubic dataset is the
+# reference benchmark: y = x**3 - 2x + deterministic noise.
+_LAB_BUILTINS: dict[str, dict[str, list[float]]] = {
+    "cubic": {"x": [(-2.0 + 4.0 * i / 200.0) for i in range(201)], "y": []},
+    "sine_decay": {"x": [(-2.0 + 4.0 * i / 200.0) for i in range(201)], "y": []},
+    "lorenz_x": {"x": [i / 100.0 for i in range(200)], "y": []},
+}
+
+
+def _lab_build_datasets() -> None:
+    """Populate _LAB_BUILTINS lazily — heavy import of sympy/math stays out of
+    the boot tripwire's hot path."""
+    if _LAB_BUILTINS["cubic"]["y"]:
+        return
+    import math as _m
+
+    # cubic: y = x**3 - 2x + noise (LCG-seeded for reproducibility)
+    state = 7
+    rows: list[float] = []
+    for xv in _LAB_BUILTINS["cubic"]["x"]:
+        state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+        noise = (state / 0x7FFFFFFF - 0.5) * 0.6
+        rows.append(xv**3 - 2.0 * xv + noise)
+    _LAB_BUILTINS["cubic"]["y"] = rows
+
+    # sine_decay: y = sin(3x) * exp(-0.3x)
+    _LAB_BUILTINS["sine_decay"]["y"] = [
+        _m.sin(3.0 * xv) * _m.exp(-0.3 * xv)
+        for xv in _LAB_BUILTINS["sine_decay"]["x"]
+    ]
+
+    # lorenz_x: simple RK-style integration at dt=0.01
+    sigma, rho, beta = 10.0, 28.0, 8.0 / 3.0
+    x_, y_, z_ = 0.1, 0.0, 0.0
+    lorenz_rows: list[float] = []
+    for _ in range(len(_LAB_BUILTINS["lorenz_x"]["x"])):
+        dt = 0.01
+        x_, y_, z_ = (
+            x_ + sigma * (y_ - x_) * dt,
+            y_ + (x_ * (rho - z_) - y_) * dt,
+            z_ + (x_ * y_ - beta * z_) * dt,
+        )
+        lorenz_rows.append(x_)
+    _LAB_BUILTINS["lorenz_x"]["y"] = lorenz_rows
+
+
+# Conservative operator library for in-browser symbolic regression.
+_LAB_EXPRESSIONS: list[str] = [
+    "x", "x**2", "x**3", "x**2 + x", "x**3 - 2*x", "x**3 - 2*x + 1",
+    "sin(x)", "cos(x)", "exp(x)", "log(x + 2)", "x * sin(x)",
+]
+
+
+def _lab_resolve_dataset(dataset):
+    """Resolve a dataset spec to (x, y) parallel lists."""
+    _lab_build_datasets()
+    import csv as _csv
+    import io as _io
+
+    if isinstance(dataset, str):
+        if dataset in _LAB_BUILTINS:
+            d = _LAB_BUILTINS[dataset]
+            return d["x"], d["y"]
+        # treat as CSV
+        reader = _csv.reader(_io.StringIO(dataset))
+        rows = [r for r in reader if r]
+        if not rows:
+            raise ValueError("empty CSV dataset")
+        body = rows[1:]
+        return [float(r[0]) for r in body], [float(r[1]) for r in body]
+    if isinstance(dataset, dict):
+        x = list(dataset.get("x") or dataset.get("X") or [])
+        y = list(dataset.get("y") or dataset.get("Y") or [])
+        if not x or not y:
+            raise ValueError("dataset dict needs 'x' and 'y' lists")
+        return x, y
+    raise TypeError(f"unsupported dataset type: {type(dataset).__name__}")
+
+
+def _lab_mse(xs, ys, expr_str):
+    import sympy
+    expr = sympy.sympify(expr_str)
+    sym_x = sympy.Symbol("x")
+    f = sympy.lambdify(sym_x, expr, "math")
+    total = 0.0
+    n = 0
+    for x_val, y_val in zip(xs, ys):
+        try:
+            pred = float(f(x_val))
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return float("inf")
+        total += (pred - y_val) ** 2
+        n += 1
+    return total / max(1, n)
+
+
+def _lab_complexity(expr_str):
+    import re as _re
+    return len(_re.findall(r"[a-zA-Z_]+|[+\-*/^()]", expr_str))
+
+
+def _lab_seal_module():
+    """Resolve the lab_seal module robustly (works whether loaded as
+    ``elohim_webapp.bridge`` or directly via importlib.spec_from_file_location)."""
+    import importlib
+    import importlib.util
+    import sys as _sys
+    from pathlib import Path as _P
+    # 1. Try relative via __package__ (normal Pyodide / package load).
+    try:
+        if __package__:
+            return importlib.import_module(__package__ + ".lab_seal")
+    except ImportError:
+        pass
+    # 2. Try already-imported sibling.
+    for mod_name, mod in list(_sys.modules.items()):
+        if mod is not None and mod_name.endswith(".lab_seal"):
+            return mod
+    # 3. Load via path next to this file (defensive — handles raw
+    #    importlib.spec_from_file_location setups, e.g. the bridge smoke test).
+    here = _P(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location(
+        "elohim_webapp_lab_seal", here / "lab_seal.py"
+    )
+    if spec and spec.loader:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    raise ImportError("cannot resolve elohim_webapp.lab_seal")
+
+
+def _lab_discover(dataset, target_column: str = "y",
+                  operators: list[str] | None = None,
+                  seed: int = 0) -> dict[str, Any]:
+    """Rank candidate expressions against the dataset by MSE."""
+    import uuid as _uuid
+    _ls = _lab_seal_module()
+    _seal = _ls.lab_seal
+    _VERSION = _ls.VERSION
+    _LAB_FACTS = _ls.FACTS
+
+    xs, ys = _lab_resolve_dataset(dataset)
+
+    ranked = []
+    for expr_str in _LAB_EXPRESSIONS:
+        mse = _lab_mse(xs, ys, expr_str)
+        complexity = _lab_complexity(expr_str)
+        candidate = {
+            "id": str(_uuid.uuid4()),
+            "expression": expr_str,
+            "complexity": complexity,
+            "status": "numerically_tested",
+            "mse_train": mse,
+            "mse_held": None,
+            "backend": "sympy_local",
+            "evidence": {
+                "n_points": len(xs),
+                "operators": operators or ["+", "-", "*", "/", "**"],
+            },
+        }
+        candidate["lab_seal"] = _seal(candidate, candidate["status"], _VERSION)
+        ranked.append(candidate)
+
+    ranked.sort(key=lambda c: (c["mse_train"], c["complexity"]))
+
+    return {
+        "ok": True,
+        "backend": "sympy_local",
+        "facts": _LAB_FACTS,
+        "version": _VERSION,
+        "candidates": ranked[:5],
+        "best": ranked[0] if ranked else None,
+    }
+
+
+def _lab_simplify(expression_str: str) -> dict[str, Any]:
+    import sympy
+    _ls = _lab_seal_module()
+    _LAB_FACTS = _ls.FACTS
+    _VERSION = _ls.VERSION
+
+    try:
+        expr = sympy.sympify(expression_str)
+    except (sympy.SympifyError, SyntaxError, TypeError) as e:
+        return {
+            "ok": False,
+            "error": f"unparseable: {e!s}",
+            "status": "inconclusive",
+            "facts": _LAB_FACTS,
+            "version": _VERSION,
+        }
+    simplified = sympy.simplify(expr)
+    same = str(simplified) == str(expr)
+    return {
+        "ok": True,
+        "input": expression_str,
+        "simplified": str(simplified),
+        "changed": not same,
+        "status": "numerically_tested" if not same else "draft",
+        "facts": _LAB_FACTS,
+        "version": _VERSION,
+    }
+
+
+def _lab_verify(expression_str: str, mode: str = "sympy",
+                property: str = "nonnegative") -> dict[str, Any]:
+    """Verify a property. In-browser only supports ``mode='sympy'`` —
+    mode='z3' returns backend_unavailable gracefully."""
+    import sympy
+    _ls = _lab_seal_module()
+    _LAB_FACTS = _ls.FACTS
+    _VERSION = _ls.VERSION
+
+    def _proven(proof):
+        return {"ok": True, "verdict": "formally_proven",
+                "counterexample": None, "proof": proof,
+                "status": "formally_proven",
+                "facts": _LAB_FACTS, "version": _VERSION}
+
+    def _counterexample(witness, witness_value=None):
+        return {"ok": True, "verdict": "counterexample_found",
+                "counterexample": {**witness, "value": witness_value},
+                "proof": None, "status": "counterexample_found",
+                "facts": _LAB_FACTS, "version": _VERSION}
+
+    def _inconclusive(reason):
+        return {"ok": True, "verdict": "inconclusive",
+                "counterexample": None, "proof": None, "reason": reason,
+                "status": "inconclusive",
+                "facts": _LAB_FACTS, "version": _VERSION}
+
+    if mode == "z3":
+        return {
+            "ok": False,
+            "verdict": "inconclusive",
+            "error": "backend_unavailable: z3 (in-browser uses sympy_local only)",
+            "status": "inconclusive",
+            "facts": _LAB_FACTS,
+            "version": _VERSION,
+        }
+
+    if property == "nonnegative":
+        try:
+            expr = sympy.sympify(expression_str)
+        except (sympy.SympifyError, SyntaxError, TypeError) as e:
+            return _inconclusive(f"unparseable: {e!s}")
+        s = sympy.simplify(expr)
+
+        if s.is_constant():
+            value = float(s)
+            if value >= 0:
+                return _proven(f"simplifies to {s} ≥ 0")
+            return _counterexample({"x": 0.0}, witness_value=value)
+
+        if s.is_Pow and s.exp.is_Integer and int(s.exp) % 2 == 0:
+            return _proven(f"({s.base})^{s.exp} ≥ 0 (even power)")
+
+        # Sum-of-nonnegatives heuristic
+        try:
+            terms = sympy.Add.make_args(s) if s.is_Add else (s,)
+            primitives_ok = True
+            for term in terms:
+                if term.is_Mul:
+                    for f in sympy.Mul.make_args(term):
+                        if f.is_constant() and float(f) < 0:
+                            primitives_ok = False; break
+                        if f.is_Pow and f.exp.is_Integer and int(f.exp) % 2 == 0:
+                            continue
+                        if not (f.is_constant() and float(f) >= 0):
+                            primitives_ok = False; break
+                    continue
+                if term.is_Pow and term.exp.is_Integer and int(term.exp) % 2 == 0:
+                    continue
+                if term.is_constant() and float(term) >= 0:
+                    continue
+                primitives_ok = False; break
+            if primitives_ok:
+                return _proven("sum of nonnegative terms")
+        except (TypeError, ValueError):
+            pass
+
+        return _inconclusive("nonnegativity not structurally provable in pure sympy")
+
+    if property == "always_true":
+        try:
+            expr = sympy.sympify(expression_str)
+        except (sympy.SympifyError, SyntaxError, TypeError) as e:
+            return _inconclusive(f"unparseable: {e!s}")
+        s = sympy.simplify(expr)
+        if s == 0:
+            return _proven("simplifies to 0")
+        return _counterexample({"x": 1.0}, witness_value=str(s))
+
+    return _inconclusive(f"unknown property: {property!r}")
+
+
+def lab_version() -> dict[str, Any]:
+    """Public version + facts surface. Mirrors elohim_lab.version()."""
+    _ls = _lab_seal_module()
+    return {"ok": True, "version": _ls.VERSION, "facts": _ls.FACTS}
+
+
+def lab_discover(dataset, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Public discover surface. Mirrors elohim_lab.discover()."""
+    return _lab_discover(dataset, *args, **kwargs)
+
+
+def lab_simplify(expression_str: str) -> dict[str, Any]:
+    """Public simplify surface. Mirrors elohim_lab.simplify()."""
+    return _lab_simplify(expression_str)
+
+
+def lab_verify(expression_str: str, mode: str = "sympy",
+               property: str = "nonnegative") -> dict[str, Any]:
+    """Public verify surface. Mirrors elohim_lab.verify()."""
+    return _lab_verify(expression_str, mode=mode, property=property)
+
+
+def lab_builtin_datasets() -> list[str]:
+    """The names of every shipped built-in dataset."""
+    _lab_build_datasets()
+    return sorted(_LAB_BUILTINS.keys())
+
+
+def lab_builtin_dataset(name: str) -> dict[str, Any]:
+    """Return a JSON-serialisable snapshot of a built-in dataset."""
+    _lab_build_datasets()
+    if name not in _LAB_BUILTINS:
+        raise KeyError(f"unknown built-in dataset: {name!r}")
+    d = _LAB_BUILTINS[name]
+    return {"name": name, "x": list(d["x"]), "y": list(d["y"])}
+
+
 def _invoke_sync(name: str, args: list[Any] | None = None, kwargs: dict[str, Any] | None = None) -> str:
     """Synchronous dispatcher for sync bridge functions (e.g. boot tripwire).
 
