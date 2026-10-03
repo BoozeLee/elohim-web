@@ -1889,6 +1889,13 @@ const WEBMCP_TOOLS = [
   },
 ];
 
+// Close every schema at the source rather than per-literal, so a tool
+// added later cannot ship open by omission. The handler gate in runTool
+// is what actually enforces this; the schema is what advertises it.
+for (const t of WEBMCP_TOOLS) {
+  t.inputSchema = { additionalProperties: false, ...t.inputSchema };
+}
+
 // ─── Push 24 — ModelContext resolution (spec §4.1) ─────────────────
 //
 // The accessor has moved across builds: window → document → navigator.
@@ -1945,10 +1952,29 @@ function deriveAnnotations(tool) {
   return { ...base, untrustedContentHint: tool.untrusted === true };
 }
 
+// Closed twice, because the browser does not close them for us. Measured
+// 2026-10-03: a tool registered with additionalProperties:false still
+// ACCEPTED {x:'hi', evil:'payload'}. Chromium does not validate
+// agent-supplied arguments, so a closed discovery schema backed by a
+// permissive handler is not a closed contract — the handler is the half
+// that actually enforces anything.
+function assertKnownArgs(tool, args) {
+  const known = new Set(Object.keys(tool.inputSchema.properties || {}));
+  for (const key of Object.keys(args || {})) {
+    if (!known.has(key)) {
+      throw new Error(
+        `Unknown argument "${key}" for ${tool.name}. ` +
+        `Accepted: ${[...known].join(", ") || "(none)"}`
+      );
+    }
+  }
+}
+
 // Every registration path routes through here, so a tool is validated and
-// dispatched in exactly one place. Task 4 adds the unknown-argument gate
-// as the first statement of this function.
+// dispatched in exactly one place. assertKnownArgs runs first: agent input
+// is untrusted, and rejection must happen before any side effect.
 function runTool(tool, args) {
+  assertKnownArgs(tool, args);
   return tool.invoke(args || {});
 }
 
@@ -2096,7 +2122,10 @@ async function mcpDispatch(method, params) {
       );
     }
     try {
-      const r = await tool.invoke(args);
+      // Through runTool, not tool.invoke, so the polyfill enforces the same
+      // unknown-argument gate as the native path. Otherwise the in-app
+      // inspector would accept anything the native registration rejects.
+      const r = await runTool(tool, args);
       return mcpContent(r);
     } catch (e) {
       return mcpContent(`error: ${e.message || String(e)}`, true);

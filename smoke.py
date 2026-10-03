@@ -2137,15 +2137,28 @@ def webmcp_contract_assertions() -> int:
         # and carries NO `ok` key, so a check on result.ok reads every call
         # as failed.
         declared = {t["name"]: t["risk"] for t in table}
-        for name in ("elohim_version", "elohim_soul_keygen", "elohim_lab_simplify"):
+        # Each tool needs its own valid arguments — an empty object is a
+        # rejected call for anything with a required field, which is the
+        # false-negative this assertion exists to catch.
+        cases = (
+            ("elohim_version", {}),
+            ("elohim_soul_keygen", {}),
+            ("elohim_lab_simplify", {"expression": "sin(x)**2 + cos(x)**2"}),
+        )
+        for name, args in cases:
             before = page.evaluate("() => JSON.stringify(localStorage)")
-            outcome = page.evaluate("""async (n) => {
+            outcome = page.evaluate("""async ({n, a}) => {
               const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
-                method:'tools/call', params:{name:n, arguments:{}}});
+                method:'tools/call', params:{name:n, arguments:a}});
               const res = r && r.result;
-              return {ok: !!res && res.resultType === 'complete',
+              // mcpContent() reports resultType 'complete' for BOTH success
+              // and error — isError is the real signal. Checking resultType
+              // alone would let a rejected call read as a clean run, which
+              // is the exact false-negative this assertion exists to prevent.
+              return {ok: !!res && res.resultType === 'complete'
+                              && res.isError !== true,
                       err: (res && (res.error || res.content?.[0]?.text)) || null};
-            }""", name)
+            }""", {"n": name, "a": args})
             after = page.evaluate("() => JSON.stringify(localStorage)")
             assert outcome["ok"], (
                 f"{name} did not complete: {str(outcome['err'])[:80]} — a "
@@ -2158,6 +2171,49 @@ def webmcp_contract_assertions() -> int:
             )
         print(f"  ✓ #85 measured risk: 3 declared-pure tools completed "
               f"with zero localStorage delta")
+
+        # #84 — closed schemas, closed TWICE. Chromium does not validate
+        # agent-supplied arguments: measured on 2026-10-03, a tool
+        # registered with additionalProperties:false ACCEPTED
+        # {x:'hi', evil:'payload'}. So the discovery schema is necessary
+        # but not sufficient — the handler must reject unknown keys itself,
+        # or "closed schema" is decoration.
+        for t in table:
+            assert t["inputSchema"].get("additionalProperties") is False, (
+                f"{t['name']} schema is open at discovery"
+            )
+        rej = page.evaluate("""async () => {
+          const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+            method:'tools/call',
+            params:{name:'elohim_seal_message',
+                    arguments:{plaintext:'hi', evil:'payload'}}});
+          return JSON.stringify(r);
+        }""")
+        assert "evil" in rej and "Unknown argument" in rej, (
+            f"unknown field was not rejected by the handler: {rej[:200]}"
+        )
+        # The polyfill must reflect the rejection rather than silently
+        # succeeding — otherwise #85 would read it as a side-effect-free run.
+        # NOTE: mcpContent() sets resultType:'complete' for BOTH success and
+        # error; the real error signal is isError. Checking resultType alone
+        # would make the success assertion vacuous.
+        pol = page.evaluate("""async () => {
+          const r = await window.elohimMcp.handle({jsonrpc:'2.0', id:1,
+            method:'tools/call',
+            params:{name:'elohim_seal_message',
+                    arguments:{plaintext:'hi', evil:'payload'}}});
+          const res = r && r.result;
+          return {rt: res && res.resultType, isError: res && res.isError,
+                  text: res && res.content && res.content[0].text};
+        }""")
+        assert pol["isError"] is True, (
+            f"unknown argument was not flagged as an error: {pol}"
+        )
+        assert "Unknown argument" in (pol["text"] or ""), (
+            f"error text does not name the offending field: {pol['text']!r}"
+        )
+        print(f"  ✓ #84 closed schemas: {len(table)} closed at discovery + "
+              f"unknown field rejected by the handler")
 
     return 0
 
