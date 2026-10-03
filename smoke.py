@@ -8,6 +8,7 @@ Run with: /usr/bin/python3 -m playwright install chromium  # first time
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -2014,7 +2015,80 @@ def main() -> int:
               f"cascade order intact, FOUC script inline, "
               f"dom_loaded {dom_loaded_ms}ms (D-J21 < 8000ms)")
 
+        # ---- WebMCP contract (Push 24) ----
+        # These run against the injected fake from webmcp_probe, NOT the
+        # Chromium feature flag. The permanent gate must not depend on an
+        # upstream-internal flag; the real runtime is the opt-in --conformance
+        # pass. See docs/superpowers/specs/2026-10-03-webmcp-contract-design.md
+        # §5 for why that matters.
         browser.close()
+    return webmcp_contract_assertions()
+
+
+def webmcp_contract_assertions() -> int:
+    """#80–#90: WebMCP registration, risk, schemas, and verification tiers.
+
+    Runs outside main()'s browser so the existing suite's state cannot
+    mask a registration failure. Uses the Tier-1 fake by default.
+    """
+    from webmcp_probe import ModelContextProbe, DEFAULT_URL
+
+    url = os.environ.get("ELOHIM_SMOKE_URL", DEFAULT_URL)
+
+    with ModelContextProbe(url=url) as probe:
+        page = probe.page
+        page.goto(url)
+        page.wait_for_selector("#boot.hidden", state="attached", timeout=300000)
+
+        # #80 — the app resolves the live accessor and registers against it.
+        # Today it guards on window.modelContext, so this reports None and
+        # getTools() is empty.
+        via = page.evaluate("() => window.__elohimWebmcpVia")
+        assert via == "navigator.modelContext", (
+            f"resolver chose {via!r}; expected 'navigator.modelContext' "
+            f"(measured 2026-10-03 on Chromium 1243 — the accessor moved "
+            f"window → document → navigator across builds)"
+        )
+        names = page.evaluate(
+            "async () => (await navigator.modelContext.getTools())"
+            ".map(t => t.name).sort()")
+        expected = sorted(page.evaluate("() => window.__elohimToolNames()"))
+        assert names == expected, (
+            f"registered tools differ from the declared table: "
+            f"registered={names} declared={expected}"
+        )
+        print(f"  ✓ #80 accessor: resolver chose {via!r}, "
+              f"{len(names)} tool(s) registered")
+
+    # #80b — Review Focus #3: the accessor must survive moving again. A
+    # resolver checking only navigator would silently register 0 tools in
+    # the next browser that relocates it — the exact failure this work
+    # exists to fix. Sequential contexts: Playwright's sync API cannot
+    # nest one browser inside another.
+    for target, want in (("document", "document.modelContext"),
+                         ("window", "window.modelContext")):
+        with ModelContextProbe(fake_target=target, url=url) as alt:
+            alt.page.goto(url)
+            alt.page.wait_for_selector("#boot.hidden",
+                                       state="attached", timeout=300000)
+            got = alt.page.evaluate("() => window.__elohimWebmcpVia")
+            assert got == want, (
+                f"resolver did not fall back to {target}: got {got!r}"
+            )
+            n = alt.page.evaluate(
+                f"async () => (await {target}.modelContext.getTools()).length")
+            assert n == len(expected), (
+                f"fallback via {target} registered {n}, expected {len(expected)}"
+            )
+    print(f"  ✓ #80b accessor fallback: document ✓ window ✓ "
+          f"(all three candidates exercised)")
+
+    # #81 — the exact tool inventory, pinned by the spec.
+    assert len(expected) == 13, (
+        f"expected 13 existing tools, got {len(expected)}: {expected}"
+    )
+    print(f"  ✓ #81 inventory: {len(expected)} tools discovered")
+
     return 0
 
 

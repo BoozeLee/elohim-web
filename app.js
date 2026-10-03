@@ -1837,6 +1837,54 @@ const WEBMCP_TOOLS = [
   },
 ];
 
+// ─── Push 24 — ModelContext resolution (spec §4.1) ─────────────────
+//
+// The accessor has moved across builds: window → document → navigator.
+// Measured 2026-10-03 on Chromium 1243, `navigator.modelContext` is the
+// live one and BOTH document and window are undefined. The previous
+// guard checked `window.modelContext` only, so on every configuration
+// tested the whole registration block was skipped — silently, because
+// the catch that would log lives inside the block that never ran.
+//
+// So try all three rather than trusting any single published answer,
+// and report which one actually answered. That report is the only
+// field-debugging signal when a user's browser registers zero tools.
+const MODEL_CONTEXT_CANDIDATES = [
+  ["navigator.modelContext", () => navigator.modelContext],
+  ["document.modelContext", () => document.modelContext],
+  ["window.modelContext", () => window.modelContext],
+];
+
+function resolveModelContext() {
+  for (const [label, get] of MODEL_CONTEXT_CANDIDATES) {
+    try {
+      const mc = get();
+      if (mc && typeof mc.registerTool === "function") {
+        return { mc, via: label };
+      }
+    } catch (_) {
+      // An accessor may throw in exotic contexts; try the next candidate.
+    }
+  }
+  return { mc: null, via: null };
+}
+
+// Every registration path routes through here, so a tool is validated and
+// dispatched in exactly one place. Task 4 adds the unknown-argument gate
+// as the first statement of this function.
+function runTool(tool, args) {
+  return tool.invoke(args || {});
+}
+
+// Exposed for the smoke harness and the in-page inspector. The harness
+// asserts against the app's own declared table, not the browser's view:
+// readOnlyHint/untrustedContentHint are write-only and never come back
+// from getTools() (spec §3.5).
+window.__elohimToolNames = () => WEBMCP_TOOLS.map((t) => t.name);
+window.__elohimToolTable = () =>
+  WEBMCP_TOOLS.map(({ name, description, inputSchema, risk, verification }) =>
+    ({ name, description, inputSchema, risk, verification }));
+
 async function registerWebMcpTools() {
   const status = $("#webmcp-status");
   const list = $("#webmcp-tool-list");
@@ -1849,17 +1897,22 @@ async function registerWebMcpTools() {
      </div>`
   ).join("");
 
-  // Native WebMCP path: Chrome 138+ (Feb 2026 preview) and any other
-  // browser that ships document.modelContext.
-  if (window.modelContext && typeof window.modelContext.registerTool === "function") {
+  // Native WebMCP path — whichever accessor this browser implements.
+  const { mc: nativeMc, via } = resolveModelContext();
+  window.__elohimWebmcpVia = via;
+  if (nativeMc) {
     webmcpRegistered = [];
     for (const t of WEBMCP_TOOLS) {
       try {
-        window.modelContext.registerTool({
+        // `execute`, not `handler`. ModelContextTool requires an `execute`
+        // member; passing `handler` throws "Required member is undefined"
+        // and registers nothing. Fixing only the accessor would have traded
+        // a silent failure for a loud one, not produced working tools.
+        nativeMc.registerTool({
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema,
-          handler: async (args) => t.invoke(args || {}),
+          execute: async (args) => runTool(t, args),
         });
         webmcpRegistered.push(t.name);
       } catch (e) {
@@ -1867,7 +1920,7 @@ async function registerWebMcpTools() {
       }
     }
     status.className = "ok";
-    status.innerHTML = `✓ registered <strong>${webmcpRegistered.length}</strong> tool(s) via <code>document.modelContext.registerTool</code> · polyfill <code>window.elohimMcp</code> also active.`;
+    status.innerHTML = `✓ registered <strong>${webmcpRegistered.length}</strong> tool(s) via <code>${escapeHtml(via)}</code> · polyfill <code>window.elohimMcp</code> also active.`;
     list.innerHTML = toolsLine;
     return;
   }
