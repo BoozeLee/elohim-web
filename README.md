@@ -520,6 +520,36 @@ actually enforces anything.
   `--enable-features=WebMCPTesting`, an upstream-internal flag. If it is
   renamed, the run **fails loudly** — it does not silently skip.
 
+### What Tier 2 actually proves — and what it does not
+
+Measured against production on 2026-10-03, Chromium 1243:
+
+| Capability | Native runtime | Result |
+|---|---|---|
+| Discovery | `navigator.modelContext.getTools()` | **25 tools** ✓ |
+| Metadata | keys are `description, inputSchema, name, origin, window` | confirms `readOnlyHint` / `untrustedContentHint` are write-only |
+| Invocation | `navigator.modelContext.executeTool(tool, args)` | **fails** |
+
+`executeTool` rejects every call with `UnknownError: Failed to parse input
+arguments` — for a tool with a valid required-argument schema, for a tool
+with an empty-properties schema, and for `elohim_version`. Omitting the
+second argument gives `2 arguments required, but only 1 present`. This is
+a limitation in the browser's experimental implementation, not in this app:
+nothing the app can change affects it.
+
+So the Tier-2 assertions exercise invocation through the app's own
+JSON-RPC route (`window.elohimMcp.handle`), which is what an agent inside
+this page would realistically use, and which routes through `runTool` so it
+enforces the same closed schemas as the native path. Native **discovery** is
+genuinely verified. Native **invocation** is not, and is not claimed.
+
+Two other measured details, both of which cost a wrong guess to find:
+
+- The method is `executeTool`, not `callTool`.
+- Its first argument is the `RegisteredTool` **object** from `getTools()`,
+  not the tool name — passing a name string throws `The provided value is
+  not of type 'RegisteredTool'`.
+
 ### Running it
 
 ```bash
